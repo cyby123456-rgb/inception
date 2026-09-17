@@ -1,0 +1,152 @@
+{
+  "last_step": 2000,
+  "warmup_excluded": 200,
+  "window_steps": 200,
+  "windows": [
+    {
+      "start": 201,
+      "end": 400,
+      "log_points": 8,
+      "means": {
+        "loss": 4.699075,
+        "recurft_recurrent_loss": 3.848526135981083,
+        "recurft_multistep_boundary_logit_kl_k1": 3.658738893840968,
+        "recurft_multistep_boundary_logit_kl_k2": 4.7415880254922715
+      }
+    },
+    {
+      "start": 401,
+      "end": 600,
+      "log_points": 8,
+      "means": {
+        "loss": 4.5549875,
+        "recurft_recurrent_loss": 3.9291383846104146,
+        "recurft_multistep_boundary_logit_kl_k1": 3.529426441461497,
+        "recurft_multistep_boundary_logit_kl_k2": 4.564681250486871
+      }
+    },
+    {
+      "start": 601,
+      "end": 800,
+      "log_points": 8,
+      "means": {
+        "loss": 4.2834125,
+        "recurft_recurrent_loss": 3.9975505232810975,
+        "recurft_multistep_boundary_logit_kl_k1": 3.279413607153126,
+        "recurft_multistep_boundary_logit_kl_k2": 4.253890669102748
+      }
+    },
+    {
+      "start": 801,
+      "end": 1000,
+      "log_points": 8,
+      "means": {
+        "loss": 4.16955,
+        "recurft_recurrent_loss": 4.0046570540964606,
+        "recurft_multistep_boundary_logit_kl_k1": 3.237542906949697,
+        "recurft_multistep_boundary_logit_kl_k2": 4.066050220806537
+      }
+    },
+    {
+      "start": 1001,
+      "end": 1200,
+      "log_points": 8,
+      "means": {
+        "loss": 4.2116375,
+        "recurft_recurrent_loss": 4.066337725371122,
+        "recurft_multistep_boundary_logit_kl_k1": 3.2034095793873076,
+        "recurft_multistep_boundary_logit_kl_k2": 4.170107844285221
+      }
+    },
+    {
+      "start": 1201,
+      "end": 1400,
+      "log_points": 8,
+      "means": {
+        "loss": 4.0183375,
+        "recurft_recurrent_loss": 4.075064218789339,
+        "recurft_multistep_boundary_logit_kl_k1": 3.05109528171424,
+        "recurft_multistep_boundary_logit_kl_k2": 3.9336669751266786
+      }
+    },
+    {
+      "start": 1401,
+      "end": 1600,
+      "log_points": 8,
+      "means": {
+        "loss": 3.98715,
+        "recurft_recurrent_loss": 4.117569761276245,
+        "recurft_multistep_boundary_logit_kl_k1": 3.0275318979435473,
+        "recurft_multistep_boundary_logit_kl_k2": 3.885808083145656
+      }
+    },
+    {
+      "start": 1601,
+      "end": 1800,
+      "log_points": 8,
+      "means": {
+        "loss": 3.964475,
+        "recurft_recurrent_loss": 4.132381090819836,
+        "recurft_multistep_boundary_logit_kl_k1": 3.0157878778489207,
+        "recurft_multistep_boundary_logit_kl_k2": 3.8481223228421517
+      }
+    },
+    {
+      "start": 1801,
+      "end": 2000,
+      "log_points": 8,
+      "means": {
+        "loss": 3.9848875,
+        "recurft_recurrent_loss": 4.183619625717402,
+        "recurft_multistep_boundary_logit_kl_k1": 3.010036811974031,
+        "recurft_multistep_boundary_logit_kl_k2": 3.8790120064191007
+      }
+    }
+  ],
+  "late_trends": {
+    "loss": {
+      "last_three_window_means": [
+        3.98715,
+        3.964475,
+        3.9848875
+      ],
+      "relative_range": 0.0056989007467633445,
+      "first_to_last_change": -0.0005674479264637789
+    },
+    "recurft_recurrent_loss": {
+      "last_three_window_means": [
+        4.117569761276245,
+        4.132381090819836,
+        4.183619625717402
+      ],
+      "relative_range": 0.01593666064603473,
+      "first_to_last_change": 0.016040982489798603
+    },
+    "recurft_multistep_boundary_logit_kl_k1": {
+      "last_three_window_means": [
+        3.0275318979435473,
+        3.0157878778489207,
+        3.010036811974031
+      ],
+      "relative_range": 0.0057973258205106185,
+      "first_to_last_change": -0.005778662804973173
+    },
+    "recurft_multistep_boundary_logit_kl_k2": {
+      "last_three_window_means": [
+        3.885808083145656,
+        3.8481223228421517,
+        3.8790120064191007
+      ],
+      "relative_range": 0.009735455227068562,
+      "first_to_last_change": -0.0017489481161029874
+    }
+  },
+  "heldout_evaluations": 0,
+  "training_total_near_plateau": true,
+  "conclusion": "Training total is near a local plateau; convergence is not established.",
+  "limitations": [
+    "The 1% range over three windows is a descriptive heuristic, not a statistical stationarity test.",
+    "Training minibatches vary; held-out KL/top-1 and draft acceptance are needed.",
+    "A budget adequate for an 8B checkpoint does not establish adequacy for a 4B checkpoint."
+  ]
+}

@@ -9,6 +9,10 @@ than reproducing token-wise greedy decoding.
 
 from __future__ import annotations
 
+# Isolated runtime: original ongoing evaluators keep their original source.
+from adaptive_two_stage_policy import recent_budget
+from collections import deque
+
 import argparse
 import inspect
 import json
@@ -437,11 +441,6 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--fast-strict-verification",
-        action="store_true",
-        help="GPU prefix matching without per-draft diagnostics; requires compact fixed/schedule strict latent decoding.",
-    )
-    parser.add_argument(
         "--anchor-hook-hidden-states",
         action="store_true",
         help=(
@@ -700,6 +699,10 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--fast-strict-diagnostics", action="store_true",
+        help="For compact exact target-match decoding, compare token IDs without full-vocabulary support statistics.",
+    )
+    parser.add_argument(
         "--ngram-max-draft-tokens",
         type=int,
         default=0,
@@ -930,8 +933,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--disable-thinking", action="store_true", default=True)
     parser.add_argument("--enable-thinking", action="store_true", help="Allow Qwen-style thinking in chat templates.")
-    parser.add_argument("--warmup-runs", type=int, default=0,
-                        help="Warm up greedy and speculative decoding on the first selected prompt before measurement.")
     parser.add_argument("--no-baseline", action="store_true")
     parser.add_argument(
         "--decode-order",
@@ -2069,44 +2070,6 @@ def target_match_lambda_for_position(args: argparse.Namespace, generated_positio
     return args.target_match_lambda
 
 
-def validate_fast_strict_verification(args: argparse.Namespace) -> None:
-    """Reject policies whose decisions require diagnostics omitted by the fast path."""
-    if not args.fast_strict_verification:
-        return
-    if not args.compact_runtime_stats or args.mode not in {"fixed", "schedule"}:
-        raise ValueError("Fast strict verification requires compact stats and fixed/schedule mode.")
-    if (args.draft_commit_policy != "target_match"
-            or args.latent_draft_commit_policy not in {None, "target_match"}
-            or args.target_match_lambda != 1.0
-            or any(getattr(args, "target_match_lambda_" + phase) not in {None, 1.0}
-                   for phase in ("early", "mid", "late"))):
-        raise ValueError("Fast strict verification requires exact target matching at every position.")
-    if (args.ngram_draft_mode != "off" or args.verification_frequency_policy != "fixed"
-            or args.precommit_unchecked_drafts or args.preemptive_lookahead
-            or args.draft_token_category_gate or args.target_match_category_lambdas
-            or args.serial_fallback_margin is not None
-            or args.serial_fallback_full_replay_margin is not None
-            or args.replay_accepted_target_cache or args.serial_target_cache_commit):
-        raise ValueError("Fast strict verification does not support n-gram, category, replay, or speculative policy overrides.")
-
-
-def strict_verify_prefix(logits: torch.Tensor, block: torch.Tensor) -> tuple[int, int | None, int]:
-    """Return accepted length (including anchor), corrective ID, and all-position matches.
-
-    Only the prefix before the first mismatch is accepted. One small D2H transfer
-    carries the decision; the final logits row predicts the *next* block's anchor.
-    """
-    draft_count = block.size(1) - 1
-    if draft_count == 0:
-        return 1, None, 0
-    targets = logits[0, :draft_count].argmax(dim=-1)
-    matches = targets.eq(block[0, 1:])
-    accepted_drafts = matches.to(torch.int64).cumprod(dim=0).sum()
-    corrective = targets.gather(0, accepted_drafts.clamp(max=draft_count - 1).reshape(1))[0]
-    prefix, token, matched = torch.stack((accepted_drafts, corrective, matches.sum())).cpu().tolist()
-    return 1 + prefix, token if prefix < draft_count else None, matched
-
-
 def target_match_accepts_candidate(
     match: bool,
     target_relative_support: float | None,
@@ -2519,8 +2482,24 @@ def next_token_distribution_stats(logits: torch.Tensor) -> dict[str, float]:
 def top_token_and_logit_margin(logits: torch.Tensor) -> tuple[int, float]:
     """Read the target top token and top-2 margin with one device-to-host transfer."""
     top_values, top_indices = torch.topk(logits[0].float(), k=2)
-    packed = torch.cat((top_values, top_indices[:1].to(top_values.dtype))).cpu().tolist()
+    # topk tie order is not argmax tie order. Target token selection must match greedy.
+    packed = torch.cat((top_values, logits[0].argmax().reshape(1).to(top_values.dtype))).cpu().tolist()
     return int(packed[2]), float(packed[0] - packed[1])
+
+
+def exact_id_diagnostics_allowed(args: argparse.Namespace, policy: str, need_margin: bool) -> bool:
+    if not getattr(args, "fast_strict_diagnostics", False) or not args.compact_runtime_stats:
+        return False
+    if policy != "target_match" or need_margin or args.target_match_lambda != 1.0:
+        return False
+    if getattr(args, "target_match_category_lambdas", ""):
+        return False
+    for phase in ("early", "mid", "late"):
+        if getattr(args, "target_match_lambda_" + phase, None) not in (None, 1.0):
+            return False
+    return all(getattr(args, name, None) is None for name in (
+        "mismatch_min_target_entropy", "mismatch_min_target_entropy_early",
+        "mismatch_min_target_entropy_mid", "mismatch_min_target_entropy_late"))
 
 
 def latent_target_margin_allows(threshold: float, margin: float | None) -> bool:
@@ -2801,10 +2780,6 @@ def speculative_decode(
     }
     stats = {
         "cycles": 0,
-        "batched_boundary_blocks": 0,
-        "parallel_draft_steps": 0,
-        "fast_strict_blocks": 0,
-        "fast_strict_draft_tokens": 0,
         "target_calls": 1,
         "draft_tokens": 0,
         "accepted_draft_tokens": 0,
@@ -2869,6 +2844,7 @@ def speculative_decode(
         "ngram_attempts": 0,
         "ngram_hits": 0,
         "fast_strict_ngram_diagnostic_blocks": 0,
+        "fast_strict_target_diagnostic_blocks": 0,
         "ngram_draft_tokens": 0,
         "accepted_ngram_tokens": 0,
         "ngram_tree_cycles": 0,
@@ -2965,6 +2941,7 @@ def speculative_decode(
     pending_t_sync_anchors: list[torch.Tensor] = []
     pending_t_sync_tokens: list[int] = []
     deferred_t_prompt_anchors: torch.Tensor | None = None
+    recent_drafts = deque(maxlen=getattr(args, "acceptance_window", 8))
     consecutive_failed_draft_cycles = 0
     consecutive_latent_margin_gate_skips = 0
     cooldown_remaining = 0
@@ -3314,6 +3291,17 @@ def speculative_decode(
             if cheap_decision["skip"]:
                 stats["cheap_policy_skips"] += 1
 
+        recent_rate = None
+        history_budget = None
+        if getattr(args, "two_stage_adaptive", False):
+            history_budget, recent_rate = recent_budget(
+                recent_drafts, args.max_drafts, args.explore_drafts,
+                args.good_acceptance, args.strong_acceptance,
+            )
+            block_limit = min(block_limit, 1 + history_budget)
+        budget_before_cooldown = block_limit
+        draft_confidence_stopped = False
+
         if (
             args.mode == "verifier"
             and args.verifier_skip_threshold is not None
@@ -3470,6 +3458,10 @@ def speculative_decode(
             elif latent_position_gated and recurrent_active and block_limit > 1:
                 block_limit = 1
                 stats["latent_position_gate_skips"] += 1
+        if not recurrent_active and not ngram_cycle:
+            # Auto-routing can disable T with n-gram drafting off.  In that case
+            # no drafter can fill the remaining block, so commit target tokens only.
+            block_limit = len(block_tokens)
         pending_lookahead_tokens = None
         block_margins: list[float | None] = [None] * max(0, len(block_tokens) - 1)
         block_scores: list[float | None] = [None] * max(0, len(block_tokens) - 1)
@@ -3596,7 +3588,8 @@ def speculative_decode(
             effective_commit_policy = args.draft_commit_policy
 
         t_cache_length = cache_length(true_t_cache, metadata["loop_start_layer"])
-        t_cache = true_t_cache if args.inplace_draft_cache else clone_cache(true_t_cache)
+        # No draft forward can mutate T's cache when this cycle skips T.
+        t_cache = true_t_cache if (args.inplace_draft_cache or not uses_latent_drafter) else clone_cache(true_t_cache)
         next_anchor = true_next_anchor
         cycle_initial_anchor = true_next_anchor
         draft_cache_layer_ids = None if args.full_draft_cache_clone else projection_ids
@@ -3621,8 +3614,6 @@ def speculative_decode(
             and not recurrent.has_token_conditioning()
         )
         if batched_draft_projection:
-            if args.draft_logit_source == "boundary":
-                stats["batched_boundary_blocks"] += 1
             draft_count = max(0, block_limit - 1)
             draft_anchors = []
             verifier_probs: list[float | None] = []
@@ -3757,21 +3748,14 @@ def speculative_decode(
                         device,
                     )
                     timings["tail_s"] += elapsed
-                if args.fast_strict_verification:
-                    # All candidates already exist: one transfer, not one .item() per draft.
-                    batch_token_ids = draft_logits[0].argmax(dim=-1).cpu().tolist()
-                else:
-                    top_values, top_indices = torch.topk(draft_logits.float(), k=2, dim=-1)
+                top_values, top_indices = torch.topk(draft_logits.float(), k=2, dim=-1)
                 for draft_idx in range(draft_logits.size(1)):
-                    if args.fast_strict_verification:
-                        draft_token, margin = batch_token_ids[draft_idx], None
-                    else:
-                        draft_token = int(top_indices[0, draft_idx, 0].item())
-                        margin = (
-                            float((top_values[0, draft_idx, 0] - top_values[0, draft_idx, 1]).item())
-                            if need_draft_margin
-                            else None
-                        )
+                    draft_token = int(top_indices[0, draft_idx, 0].item())
+                    margin = (
+                        float((top_values[0, draft_idx, 0] - top_values[0, draft_idx, 1]).item())
+                        if need_draft_margin
+                        else None
+                    )
                     if (
                         effective_commit_policy == "draft_margin"
                         and margin is not None
@@ -3816,6 +3800,7 @@ def speculative_decode(
                             generated_start + len(block_tokens) - 1,
                         )
                     ):
+                        draft_confidence_stopped = True
                         break
                     if (
                         args.mode == "verifier"
@@ -3926,7 +3911,6 @@ def speculative_decode(
                         device,
                     )
                     timings["draft_parallel_s"] += elapsed
-                    stats["parallel_draft_steps"] += 1
                 elif args.draft_logit_source == "boundary":
                     draft_logits, elapsed = timed(
                         lambda: recurrent.boundary_logits(next_anchor, get_base_causal_lm(model)),
@@ -3941,19 +3925,15 @@ def speculative_decode(
                         device,
                     )
                     timings["tail_s"] += elapsed
-                if args.fast_strict_verification:
-                    draft_token = int(draft_logits.reshape(-1, draft_logits.size(-1))[-1].argmax().item())
-                    margin = None
-                else:
-                    top_values, top_indices = torch.topk(draft_logits.float(), k=2, dim=-1)
-                if not args.fast_strict_verification and top_indices.dim() == 3:
+                top_values, top_indices = torch.topk(draft_logits.float(), k=2, dim=-1)
+                if top_indices.dim() == 3:
                     draft_token = int(top_indices[0, -1, 0].item())
                     margin = (
                         float((top_values[0, -1, 0] - top_values[0, -1, 1]).item())
                         if need_draft_margin
                         else None
                     )
-                elif not args.fast_strict_verification:
+                else:
                     draft_token = int(top_indices[0, 0].item())
                     margin = (
                         float((top_values[0, 0] - top_values[0, 1]).item())
@@ -4382,403 +4362,394 @@ def speculative_decode(
                 }
             )
 
-        fast_corrective_token = None
-        if args.fast_strict_verification:
-            acceptance_start = time.perf_counter()
-            accepted, fast_corrective_token, matched = strict_verify_prefix(verify_outputs.logits, block_tensor)
-            timings["acceptance_policy_s"] += time.perf_counter() - acceptance_start
-            stats["fast_strict_blocks"] += 1
-            stats["fast_strict_draft_tokens"] += len(block_tokens) - 1
-            stats["matched_draft_tokens"] += matched
-            stats["target_match_observations"] += len(block_tokens) - 1
-            strict_safe_drafts = expanded_safe_drafts = 0
-            target_matches = target_metric_rows = target_predictions = None
-        else:
-            acceptance_diagnostics_start = time.perf_counter()
-            draft_count = max(0, len(block_tokens) - 1)
-            target_logits_block = verify_outputs.logits[0, :draft_count]
-            fast_strict_ngram_diagnostics = bool(
-                args.fast_strict_ngram_diagnostics
-                and args.compact_runtime_stats
-                and effective_commit_policy == "target_match"
-                and ngram_cycle
-                and args.ngram_strict_target_match
-                and not need_target_margin
-            )
-            target_predictions = target_logits_block.argmax(dim=-1)
-            need_target_acceptance_diagnostics = bool(
-                not args.compact_runtime_stats
-                or effective_commit_policy in {"target_match", "target_match_expand"}
-            )
-            target_metric_rows = None
-            if need_target_acceptance_diagnostics and draft_count > 0:
-                if fast_strict_ngram_diagnostics:
-                    nan = float("nan")
-                    target_metric_rows = [
-                        [float(token), nan, nan, nan, nan, nan]
-                        for token in target_predictions.cpu().tolist()
-                    ]
-                    stats["fast_strict_ngram_diagnostic_blocks"] += 1
-                else:
-                    target_logits_block = target_logits_block.float()
-            if (
-                need_target_acceptance_diagnostics
-                and draft_count > 0
-                and not fast_strict_ngram_diagnostics
-            ):
-                draft_id_tensor = torch.tensor(block_tokens[1:], dtype=torch.long, device=device)
-                row_indices = torch.arange(draft_count, device=device)
-                draft_logits = target_logits_block[row_indices, draft_id_tensor]
-                relative_supports = torch.exp(draft_logits - target_logits_block.max(dim=-1).values)
+        acceptance_diagnostics_start = time.perf_counter()
+        draft_count = max(0, len(block_tokens) - 1)
+        target_logits_block = verify_outputs.logits[0, :draft_count]
+        fast_strict_ngram_diagnostics = bool(
+            args.fast_strict_ngram_diagnostics
+            and args.compact_runtime_stats
+            and effective_commit_policy == "target_match"
+            and ngram_cycle
+            and args.ngram_strict_target_match
+            and not need_target_margin
+        )
+        fast_strict_ngram_diagnostics = fast_strict_ngram_diagnostics or exact_id_diagnostics_allowed(
+            args, effective_commit_policy, need_target_margin
+        )
+        target_predictions = target_logits_block.argmax(dim=-1)
+        need_target_acceptance_diagnostics = bool(
+            not args.compact_runtime_stats
+            or effective_commit_policy in {"target_match", "target_match_expand"}
+        )
+        target_metric_rows = None
+        if need_target_acceptance_diagnostics and draft_count > 0:
+            if fast_strict_ngram_diagnostics:
+                nan = float("nan")
+                target_metric_rows = [
+                    [float(token), nan, nan, nan, nan, nan]
+                    for token in target_predictions.cpu().tolist()
+                ]
+                stats["fast_strict_ngram_diagnostic_blocks" if ngram_cycle else "fast_strict_target_diagnostic_blocks"] += 1
+            else:
+                target_logits_block = target_logits_block.float()
+        if (
+            need_target_acceptance_diagnostics
+            and draft_count > 0
+            and not fast_strict_ngram_diagnostics
+        ):
+            draft_id_tensor = torch.tensor(block_tokens[1:], dtype=torch.long, device=device)
+            row_indices = torch.arange(draft_count, device=device)
+            draft_logits = target_logits_block[row_indices, draft_id_tensor]
+            relative_supports = torch.exp(draft_logits - target_logits_block.max(dim=-1).values)
 
-                nan_values = torch.full_like(relative_supports, float("nan"))
-                target_entropies = nan_values
-                draft_probabilities = nan_values
-                target_top1_probabilities = nan_values
-                if not args.compact_runtime_stats:
-                    target_probs_block = torch.softmax(target_logits_block, dim=-1)
-                    draft_probabilities = target_probs_block[row_indices, draft_id_tensor]
-                    target_top1_probabilities = target_probs_block[row_indices, target_predictions]
-                    target_entropies = -(
-                        target_probs_block
-                        * torch.log(target_probs_block.clamp_min(1e-12))
-                    ).sum(dim=-1)
-                elif effective_commit_policy == "target_match":
-                    entropy_thresholds = (
-                        [None] * draft_count
-                        if ngram_cycle and args.ngram_strict_target_match
-                        else [
-                            mismatch_entropy_for_position(args, generated_start + draft_idx)
+            nan_values = torch.full_like(relative_supports, float("nan"))
+            target_entropies = nan_values
+            draft_probabilities = nan_values
+            target_top1_probabilities = nan_values
+            if not args.compact_runtime_stats:
+                target_probs_block = torch.softmax(target_logits_block, dim=-1)
+                draft_probabilities = target_probs_block[row_indices, draft_id_tensor]
+                target_top1_probabilities = target_probs_block[row_indices, target_predictions]
+                target_entropies = -(
+                    target_probs_block
+                    * torch.log(target_probs_block.clamp_min(1e-12))
+                ).sum(dim=-1)
+            elif effective_commit_policy == "target_match":
+                entropy_thresholds = (
+                    [None] * draft_count
+                    if ngram_cycle and args.ngram_strict_target_match
+                    else [
+                        mismatch_entropy_for_position(args, generated_start + draft_idx)
+                        for draft_idx in range(1, len(block_tokens))
+                    ]
+                )
+                if any(value is not None for value in entropy_thresholds):
+                    if args.sparse_target_entropy:
+                        lambda_thresholds = [
+                            target_match_lambda_for_position(args, generated_start + draft_idx)
                             for draft_idx in range(1, len(block_tokens))
                         ]
-                    )
-                    if any(value is not None for value in entropy_thresholds):
-                        if args.sparse_target_entropy:
+                        if target_match_category_lambdas:
+                            minimum_category_lambda = min(target_match_category_lambdas.values())
                             lambda_thresholds = [
-                                target_match_lambda_for_position(args, generated_start + draft_idx)
-                                for draft_idx in range(1, len(block_tokens))
+                                min(value, minimum_category_lambda) for value in lambda_thresholds
                             ]
-                            if target_match_category_lambdas:
-                                minimum_category_lambda = min(target_match_category_lambdas.values())
-                                lambda_thresholds = [
-                                    min(value, minimum_category_lambda) for value in lambda_thresholds
-                                ]
-                            lambda_tensor = torch.tensor(
-                                lambda_thresholds,
-                                dtype=relative_supports.dtype,
-                                device=device,
-                            )
-                            entropy_active = torch.tensor(
-                                [value is not None for value in entropy_thresholds],
-                                dtype=torch.bool,
-                                device=device,
-                            )
-                            entropy_rows = (
-                                entropy_active
-                                & target_predictions.ne(draft_id_tensor)
-                                & ((lambda_tensor <= 0.0) | (relative_supports >= lambda_tensor))
-                            )
-                            selected_logits = target_logits_block[entropy_rows]
-                            selected_probs = torch.softmax(selected_logits, dim=-1)
-                            selected_entropies = -(
-                                selected_probs * torch.log(selected_probs.clamp_min(1e-12))
-                            ).sum(dim=-1)
-                            target_entropies = nan_values.clone()
-                            target_entropies[entropy_rows] = selected_entropies
-                        else:
-                            target_probs_block = torch.softmax(target_logits_block, dim=-1)
-                            target_entropies = -(
-                                target_probs_block
-                                * torch.log(target_probs_block.clamp_min(1e-12))
-                            ).sum(dim=-1)
+                        lambda_tensor = torch.tensor(
+                            lambda_thresholds,
+                            dtype=relative_supports.dtype,
+                            device=device,
+                        )
+                        entropy_active = torch.tensor(
+                            [value is not None for value in entropy_thresholds],
+                            dtype=torch.bool,
+                            device=device,
+                        )
+                        entropy_rows = (
+                            entropy_active
+                            & target_predictions.ne(draft_id_tensor)
+                            & ((lambda_tensor <= 0.0) | (relative_supports >= lambda_tensor))
+                        )
+                        selected_logits = target_logits_block[entropy_rows]
+                        selected_probs = torch.softmax(selected_logits, dim=-1)
+                        selected_entropies = -(
+                            selected_probs * torch.log(selected_probs.clamp_min(1e-12))
+                        ).sum(dim=-1)
+                        target_entropies = nan_values.clone()
+                        target_entropies[entropy_rows] = selected_entropies
+                    else:
+                        target_probs_block = torch.softmax(target_logits_block, dim=-1)
+                        target_entropies = -(
+                            target_probs_block
+                            * torch.log(target_probs_block.clamp_min(1e-12))
+                        ).sum(dim=-1)
 
-                target_top1_margins = nan_values
-                if need_target_margin:
-                    target_top2 = torch.topk(target_logits_block, k=2, dim=-1).values
-                    target_top1_margins = target_top2[:, 0] - target_top2[:, 1]
+            target_top1_margins = nan_values
+            if need_target_margin:
+                target_top2 = torch.topk(target_logits_block, k=2, dim=-1).values
+                target_top1_margins = target_top2[:, 0] - target_top2[:, 1]
 
-                # One device-to-host synchronization for every target diagnostic in the block.
-                target_metric_rows = torch.stack(
-                    [
-                        target_predictions.float(),
-                        relative_supports,
-                        target_entropies,
-                        draft_probabilities,
-                        target_top1_probabilities,
-                        target_top1_margins,
-                    ],
-                    dim=-1,
-                ).cpu().tolist()
-            timings["acceptance_diagnostics_s"] += (
-                time.perf_counter() - acceptance_diagnostics_start
+            # One device-to-host synchronization for every target diagnostic in the block.
+            target_metric_rows = torch.stack(
+                [
+                    target_predictions.float(),
+                    relative_supports,
+                    target_entropies,
+                    draft_probabilities,
+                    target_top1_probabilities,
+                    target_top1_margins,
+                ],
+                dim=-1,
+            ).cpu().tolist()
+        timings["acceptance_diagnostics_s"] += (
+            time.perf_counter() - acceptance_diagnostics_start
+        )
+
+        target_matches = None
+        if need_target_acceptance_diagnostics:
+            target_match_compare_start = time.perf_counter()
+            target_matches = [
+                block_tokens[draft_idx] == int(target_metric_rows[draft_idx - 1][0])
+                for draft_idx in range(1, len(block_tokens))
+            ]
+            timings["target_match_compare_s"] += (
+                time.perf_counter() - target_match_compare_start
             )
 
-            target_matches = None
+        acceptance_record_start = time.perf_counter()
+        for draft_idx in range(1, len(block_tokens)):
+            target_token = None
+            matched = None
+            target_top1_margin = None
+            relative_support = None
             if need_target_acceptance_diagnostics:
-                target_match_compare_start = time.perf_counter()
-                target_matches = [
-                    block_tokens[draft_idx] == int(target_metric_rows[draft_idx - 1][0])
-                    for draft_idx in range(1, len(block_tokens))
-                ]
-                timings["target_match_compare_s"] += (
-                    time.perf_counter() - target_match_compare_start
-                )
-
-            acceptance_record_start = time.perf_counter()
-            for draft_idx in range(1, len(block_tokens)):
-                target_token = None
-                matched = None
-                target_top1_margin = None
-                relative_support = None
-                if need_target_acceptance_diagnostics:
-                    metric_row = target_metric_rows[draft_idx - 1]
-                    target_token = int(metric_row[0])
-                    matched = target_matches[draft_idx - 1]
-                    if not fast_strict_ngram_diagnostics:
-                        relative_support = float(metric_row[1])
-                    stats["matched_draft_tokens"] += int(matched)
-                    stats["target_match_observations"] += 1
-                    if relative_support is not None:
-                        stats["target_relative_supports"].append(relative_support)
-                    if need_target_margin:
-                        target_top1_margin = float(metric_row[5])
-                need_token_category = bool(
-                    not args.compact_runtime_stats
-                    or draft_category_gate
-                    or target_match_category_lambdas
-                )
-                draft_token_text = None
-                if tokenizer is not None and need_token_category:
-                    draft_token_text = decode_token(block_tokens[draft_idx])
-                draft_token_category = (
-                    token_category_from_text(draft_token_text or "")
-                    if draft_token_text is not None
-                    else None
-                )
-                draft_category_allowed = (
-                    draft_token_category in draft_category_gate
-                    if draft_category_gate
-                    else None
-                )
-                lambda_used = None
-                if effective_commit_policy == "target_match":
-                    lambda_used = (
-                        1.0
-                        if ngram_cycle and args.ngram_strict_target_match
-                        else target_match_category_lambdas.get(
-                            draft_token_category or "",
-                            target_match_lambda_for_position(
-                                args,
-                                generated_start + draft_idx,
-                            ),
-                        )
-                    )
-                mismatch_entropy_threshold = (
-                    None
+                metric_row = target_metric_rows[draft_idx - 1]
+                target_token = int(metric_row[0])
+                matched = target_matches[draft_idx - 1]
+                if not fast_strict_ngram_diagnostics:
+                    relative_support = float(metric_row[1])
+                stats["matched_draft_tokens"] += int(matched)
+                stats["target_match_observations"] += 1
+                if relative_support is not None:
+                    stats["target_relative_supports"].append(relative_support)
+                if need_target_margin:
+                    target_top1_margin = float(metric_row[5])
+            need_token_category = bool(
+                not args.compact_runtime_stats
+                or draft_category_gate
+                or target_match_category_lambdas
+            )
+            draft_token_text = None
+            if tokenizer is not None and need_token_category:
+                draft_token_text = decode_token(block_tokens[draft_idx])
+            draft_token_category = (
+                token_category_from_text(draft_token_text or "")
+                if draft_token_text is not None
+                else None
+            )
+            draft_category_allowed = (
+                draft_token_category in draft_category_gate
+                if draft_category_gate
+                else None
+            )
+            lambda_used = None
+            if effective_commit_policy == "target_match":
+                lambda_used = (
+                    1.0
                     if ngram_cycle and args.ngram_strict_target_match
-                    else mismatch_entropy_for_position(args, generated_start + draft_idx)
-                    if effective_commit_policy == "target_match"
-                    else None
-                )
-                need_entropy = bool(
-                    effective_commit_policy == "target_match"
-                    and mismatch_entropy_threshold is not None
-                    and matched is False
-                    and draft_category_allowed is not False
-                    and lambda_used is not None
-                    and (
-                        lambda_used <= 0.0
-                        or (relative_support is not None and relative_support >= lambda_used)
+                    else target_match_category_lambdas.get(
+                        draft_token_category or "",
+                        target_match_lambda_for_position(
+                            args,
+                            generated_start + draft_idx,
+                        ),
                     )
                 )
-                target_entropy = None
-                target_top1_prob = None
-                draft_prob = None
-                if not args.compact_runtime_stats or need_entropy:
-                    metric_row = target_metric_rows[draft_idx - 1]
-                    target_entropy = float(metric_row[2])
-                    draft_prob = float(metric_row[3])
-                    target_top1_prob = float(metric_row[4])
-                block_draft_records.append(
-                    {
-                        "cycle": cycle,
-                        "draft_index": draft_idx,
-                        "generated_position": generated_start + draft_idx,
-                        "sequence_position": old_length + draft_idx,
-                        "token": block_tokens[draft_idx],
-                        "token_text": draft_token_text,
-                        "token_category": draft_token_category,
-                        "draft_source": "ngram" if ngram_cycle else "latent",
-                        "draft_category_gate": sorted(draft_category_gate) if draft_category_gate else None,
-                        "draft_category_allowed": draft_category_allowed,
-                        "target_match_category_lambdas": (
-                            target_match_category_lambdas if target_match_category_lambdas else None
-                        ),
-                        "target_match_lambda_used": lambda_used,
-                        "mismatch_min_target_entropy_used": mismatch_entropy_threshold,
-                        "target_token": target_token,
-                        "margin": block_margins[draft_idx - 1],
-                        "min_draft_margin_used": min_draft_margin_for_position(
-                            args, generated_start + draft_idx
-                        ),
-                        "verifier_score": block_scores[draft_idx - 1],
-                        "verifier_threshold": block_thresholds[draft_idx - 1],
-                        "match": matched,
-                        "target_relative_support": relative_support,
-                        "target_entropy": target_entropy,
-                        "target_top1_prob": target_top1_prob,
-                        "target_top1_margin": target_top1_margin,
-                        "draft_prob": draft_prob,
-                    }
+            mismatch_entropy_threshold = (
+                None
+                if ngram_cycle and args.ngram_strict_target_match
+                else mismatch_entropy_for_position(args, generated_start + draft_idx)
+                if effective_commit_policy == "target_match"
+                else None
+            )
+            need_entropy = bool(
+                effective_commit_policy == "target_match"
+                and mismatch_entropy_threshold is not None
+                and matched is False
+                and draft_category_allowed is not False
+                and lambda_used is not None
+                and (
+                    lambda_used <= 0.0
+                    or (relative_support is not None and relative_support >= lambda_used)
                 )
-            timings["acceptance_record_s"] += time.perf_counter() - acceptance_record_start
-
-            acceptance_policy_start = time.perf_counter()
-            strict_safe_drafts = 0
-            expanded_safe_drafts = 0
-            if effective_commit_policy == "refine_block":
-                refined_tokens = [block_tokens[0]]
-                refined_tokens.extend(
-                    int(target_predictions[draft_idx - 1].item())
-                    for draft_idx in range(1, len(block_tokens))
-                )
-                if refined_tokens != block_tokens:
-                    stats["refinement_passes"] += 1
-                    for token_idx, token in enumerate(refined_tokens):
-                        if token in eos_ids:
-                            refined_tokens = refined_tokens[: token_idx + 1]
-                            break
-                    verify_outputs.past_key_values.crop(old_length)
-                    refined_tensor = torch.tensor([refined_tokens], dtype=torch.long, device=device)
-                    verify_outputs, elapsed = timed(
-                        lambda: tracked_target_forward(
-                            model,
-                            refined_tensor,
-                            past_key_values=verify_outputs.past_key_values,
-                            start_position=old_length,
-                            omit_attention_mask=args.omit_target_attention_mask,
-                        ),
-                        device,
-                    )
-                    timings["refine_s"] += elapsed
-                    stats["target_calls"] += 1
-                    block_tokens = refined_tokens
-                accepted = len(block_tokens)
-            elif effective_commit_policy in {"whole_block", "ngram_prefix"}:
-                accepted = len(block_tokens)
-            elif effective_commit_policy == "category_block":
-                accepted = 1
-                unchecked_budget_used = stats["accepted_unchecked_tokens"]
-                pending_unchecked_positions: list[int] = []
-                for record in block_draft_records:
-                    if record.get("draft_category_allowed") is False:
-                        break
-                    if (
-                        args.max_accepted_unchecked_per_sequence is not None
-                        and unchecked_budget_used >= args.max_accepted_unchecked_per_sequence
-                    ):
-                        break
-                    if args.max_accepted_unchecked_per_window is not None:
-                        generated_position = int(record["generated_position"])
-                        window = generated_position // args.unchecked_budget_window_tokens
-                        used_in_window = sum(
-                            int(position) // args.unchecked_budget_window_tokens == window
-                            for position in (
-                                stats["accepted_unchecked_positions"] + pending_unchecked_positions
-                            )
-                        )
-                        if used_in_window >= args.max_accepted_unchecked_per_window:
-                            break
-                    accepted += 1
-                    unchecked_budget_used += 1
-                    pending_unchecked_positions.append(int(record["generated_position"]))
-            elif effective_commit_policy == "draft_margin":
-                accepted = 1 + count_accepted_draft_margin_records(
-                    block_draft_records,
-                    args.min_draft_margin,
-                    args.max_accepted_unchecked_per_sequence,
-                    stats["accepted_unchecked_tokens"],
-                    max_unchecked_per_window=args.max_accepted_unchecked_per_window,
-                    unchecked_budget_window_tokens=args.unchecked_budget_window_tokens,
-                    accepted_unchecked_positions=stats["accepted_unchecked_positions"],
-                    margin_threshold_for_position=lambda position: min_draft_margin_for_position(
-                        args, position
+            )
+            target_entropy = None
+            target_top1_prob = None
+            draft_prob = None
+            if not args.compact_runtime_stats or need_entropy:
+                metric_row = target_metric_rows[draft_idx - 1]
+                target_entropy = float(metric_row[2])
+                draft_prob = float(metric_row[3])
+                target_top1_prob = float(metric_row[4])
+            block_draft_records.append(
+                {
+                    "cycle": cycle,
+                    "draft_index": draft_idx,
+                    "generated_position": generated_start + draft_idx,
+                    "sequence_position": old_length + draft_idx,
+                    "token": block_tokens[draft_idx],
+                    "token_text": draft_token_text,
+                    "token_category": draft_token_category,
+                    "draft_source": "ngram" if ngram_cycle else "latent",
+                    "draft_category_gate": sorted(draft_category_gate) if draft_category_gate else None,
+                    "draft_category_allowed": draft_category_allowed,
+                    "target_match_category_lambdas": (
+                        target_match_category_lambdas if target_match_category_lambdas else None
                     ),
+                    "target_match_lambda_used": lambda_used,
+                    "mismatch_min_target_entropy_used": mismatch_entropy_threshold,
+                    "target_token": target_token,
+                    "margin": block_margins[draft_idx - 1],
+                    "min_draft_margin_used": min_draft_margin_for_position(
+                        args, generated_start + draft_idx
+                    ),
+                    "verifier_score": block_scores[draft_idx - 1],
+                    "verifier_threshold": block_thresholds[draft_idx - 1],
+                    "match": matched,
+                    "target_relative_support": relative_support,
+                    "target_entropy": target_entropy,
+                    "target_top1_prob": target_top1_prob,
+                    "target_top1_margin": target_top1_margin,
+                    "draft_prob": draft_prob,
+                }
+            )
+        timings["acceptance_record_s"] += time.perf_counter() - acceptance_record_start
+
+        acceptance_policy_start = time.perf_counter()
+        strict_safe_drafts = 0
+        expanded_safe_drafts = 0
+        if effective_commit_policy == "refine_block":
+            refined_tokens = [block_tokens[0]]
+            refined_tokens.extend(
+                int(target_predictions[draft_idx - 1].item())
+                for draft_idx in range(1, len(block_tokens))
+            )
+            if refined_tokens != block_tokens:
+                stats["refinement_passes"] += 1
+                for token_idx, token in enumerate(refined_tokens):
+                    if token in eos_ids:
+                        refined_tokens = refined_tokens[: token_idx + 1]
+                        break
+                verify_outputs.past_key_values.crop(old_length)
+                refined_tensor = torch.tensor([refined_tokens], dtype=torch.long, device=device)
+                verify_outputs, elapsed = timed(
+                    lambda: tracked_target_forward(
+                        model,
+                        refined_tensor,
+                        past_key_values=verify_outputs.past_key_values,
+                        start_position=old_length,
+                        omit_attention_mask=args.omit_target_attention_mask,
+                    ),
+                    device,
                 )
-            elif effective_commit_policy == "target_match_expand":
-                strict_accepted = 1
+                timings["refine_s"] += elapsed
+                stats["target_calls"] += 1
+                block_tokens = refined_tokens
+            accepted = len(block_tokens)
+        elif effective_commit_policy in {"whole_block", "ngram_prefix"}:
+            accepted = len(block_tokens)
+        elif effective_commit_policy == "category_block":
+            accepted = 1
+            unchecked_budget_used = stats["accepted_unchecked_tokens"]
+            pending_unchecked_positions: list[int] = []
+            for record in block_draft_records:
+                if record.get("draft_category_allowed") is False:
+                    break
+                if (
+                    args.max_accepted_unchecked_per_sequence is not None
+                    and unchecked_budget_used >= args.max_accepted_unchecked_per_sequence
+                ):
+                    break
+                if args.max_accepted_unchecked_per_window is not None:
+                    generated_position = int(record["generated_position"])
+                    window = generated_position // args.unchecked_budget_window_tokens
+                    used_in_window = sum(
+                        int(position) // args.unchecked_budget_window_tokens == window
+                        for position in (
+                            stats["accepted_unchecked_positions"] + pending_unchecked_positions
+                        )
+                    )
+                    if used_in_window >= args.max_accepted_unchecked_per_window:
+                        break
+                accepted += 1
+                unchecked_budget_used += 1
+                pending_unchecked_positions.append(int(record["generated_position"]))
+        elif effective_commit_policy == "draft_margin":
+            accepted = 1 + count_accepted_draft_margin_records(
+                block_draft_records,
+                args.min_draft_margin,
+                args.max_accepted_unchecked_per_sequence,
+                stats["accepted_unchecked_tokens"],
+                max_unchecked_per_window=args.max_accepted_unchecked_per_window,
+                unchecked_budget_window_tokens=args.unchecked_budget_window_tokens,
+                accepted_unchecked_positions=stats["accepted_unchecked_positions"],
+                margin_threshold_for_position=lambda position: min_draft_margin_for_position(
+                    args, position
+                ),
+            )
+        elif effective_commit_policy == "target_match_expand":
+            strict_accepted = 1
+            for record in block_draft_records:
+                if record.get("draft_category_allowed") is False:
+                    break
+                if not record["match"]:
+                    break
+                strict_accepted += 1
+
+            strict_safe_drafts = max(0, strict_accepted - 1)
+            expanded_safe_drafts = strict_safe_drafts
+            if (
+                generated_start >= args.expand_after_position
+                and strict_safe_drafts >= args.expand_min_safe_drafts
+            ):
+                category_safe_drafts = 0
                 for record in block_draft_records:
                     if record.get("draft_category_allowed") is False:
                         break
-                    if not record["match"]:
-                        break
-                    strict_accepted += 1
-
-                strict_safe_drafts = max(0, strict_accepted - 1)
-                expanded_safe_drafts = strict_safe_drafts
+                    category_safe_drafts += 1
+                expanded_safe_drafts = min(
+                    category_safe_drafts,
+                    args.expand_max_accepted_drafts,
+                    max(strict_safe_drafts, int(math.ceil(strict_safe_drafts * args.expand_multiplier))),
+                )
+                expanded_safe_drafts = limit_target_match_expand_records(
+                    block_draft_records,
+                    expanded_safe_drafts,
+                    stats["accepted_mismatch_tokens"],
+                    args.max_accepted_mismatches_per_sequence,
+                )
+            if expanded_safe_drafts > strict_safe_drafts:
+                stats["target_match_expand_events"] += 1
+                stats["target_match_expand_extra_tokens"] += expanded_safe_drafts - strict_safe_drafts
+            accepted = 1 + expanded_safe_drafts
+        else:
+            accepted = 1
+            mismatch_budget_used = stats["accepted_mismatch_tokens"]
+            for draft_idx in range(1, len(block_tokens)):
+                record = block_draft_records[draft_idx - 1]
+                if record.get("draft_category_allowed") is False:
+                    break
                 if (
-                    generated_start >= args.expand_after_position
-                    and strict_safe_drafts >= args.expand_min_safe_drafts
+                    args.serial_fallback_margin is not None
+                    and record["target_top1_margin"] <= args.serial_fallback_margin
                 ):
-                    category_safe_drafts = 0
-                    for record in block_draft_records:
-                        if record.get("draft_category_allowed") is False:
-                            break
-                        category_safe_drafts += 1
-                    expanded_safe_drafts = min(
-                        category_safe_drafts,
-                        args.expand_max_accepted_drafts,
-                        max(strict_safe_drafts, int(math.ceil(strict_safe_drafts * args.expand_multiplier))),
-                    )
-                    expanded_safe_drafts = limit_target_match_expand_records(
-                        block_draft_records,
-                        expanded_safe_drafts,
-                        stats["accepted_mismatch_tokens"],
-                        args.max_accepted_mismatches_per_sequence,
-                    )
-                if expanded_safe_drafts > strict_safe_drafts:
-                    stats["target_match_expand_events"] += 1
-                    stats["target_match_expand_extra_tokens"] += expanded_safe_drafts - strict_safe_drafts
-                accepted = 1 + expanded_safe_drafts
-            else:
-                accepted = 1
-                mismatch_budget_used = stats["accepted_mismatch_tokens"]
-                for draft_idx in range(1, len(block_tokens)):
-                    record = block_draft_records[draft_idx - 1]
-                    if record.get("draft_category_allowed") is False:
-                        break
+                    break
+                lambda_for_token = float(record["target_match_lambda_used"])
+                accept_draft = target_match_accepts_candidate(
+                    bool(record["match"]),
+                    record["target_relative_support"],
+                    lambda_for_token,
+                )
+                if (
+                    accept_draft
+                    and not record["match"]
+                    and record["mismatch_min_target_entropy_used"] is not None
+                ):
+                    if record["target_entropy"] is None:
+                        raise RuntimeError("Target entropy was not computed for an accepted mismatch.")
+                    if record["target_entropy"] < record["mismatch_min_target_entropy_used"]:
+                        accept_draft = False
+                if accept_draft and not record["match"]:
                     if (
-                        args.serial_fallback_margin is not None
-                        and record["target_top1_margin"] <= args.serial_fallback_margin
+                        args.max_accepted_mismatches_per_sequence is not None
+                        and mismatch_budget_used >= args.max_accepted_mismatches_per_sequence
                     ):
-                        break
-                    lambda_for_token = float(record["target_match_lambda_used"])
-                    accept_draft = target_match_accepts_candidate(
-                        bool(record["match"]),
-                        record["target_relative_support"],
-                        lambda_for_token,
-                    )
-                    if (
-                        accept_draft
-                        and not record["match"]
-                        and record["mismatch_min_target_entropy_used"] is not None
-                    ):
-                        if record["target_entropy"] is None:
-                            raise RuntimeError("Target entropy was not computed for an accepted mismatch.")
-                        if record["target_entropy"] < record["mismatch_min_target_entropy_used"]:
-                            accept_draft = False
-                    if accept_draft and not record["match"]:
-                        if (
-                            args.max_accepted_mismatches_per_sequence is not None
-                            and mismatch_budget_used >= args.max_accepted_mismatches_per_sequence
-                        ):
-                            accept_draft = False
-                        else:
-                            mismatch_budget_used += 1
-                    if not accept_draft:
-                        break
-                    accepted += 1
-            timings["acceptance_policy_s"] += time.perf_counter() - acceptance_policy_start
+                        accept_draft = False
+                    else:
+                        mismatch_budget_used += 1
+                if not accept_draft:
+                    break
+                accepted += 1
+        timings["acceptance_policy_s"] += time.perf_counter() - acceptance_policy_start
 
         if precommit_unchecked and accepted != len(block_tokens):
             raise RuntimeError(
@@ -4897,6 +4868,8 @@ def speculative_decode(
                         stats["ngram_wide_route_disables"] += 1
                         stats["ngram_wide_route_disable_position"] = generated_start
         attempted_latent_drafts = max(0, len(block_tokens) - 1) if uses_latent_drafter else 0
+        if attempted_latent_drafts > 0:
+            recent_drafts.append((max(0, accepted - 1), attempted_latent_drafts))
         if args.draft_cooldown_after_failures > 0 and attempted_latent_drafts > 0:
             if accepted <= 1:
                 consecutive_failed_draft_cycles += 1
@@ -4993,10 +4966,6 @@ def speculative_decode(
         )
         accelerated_generated_positions = []
         accelerated_sequence_positions = []
-        if args.fast_strict_verification:
-            # Strict prefix matching proves every committed draft matches the verifier.
-            accelerated_generated_positions = list(range(generated_start + 1, generated_start + accepted))
-            accelerated_sequence_positions = list(range(old_length + 1, old_length + accepted))
         for record in block_draft_records:
             accepted_draft = int(record["draft_index"]) < accepted
             accelerated = accepted_draft and effective_commit_policy != "refine_block"
@@ -5073,6 +5042,14 @@ def speculative_decode(
                 "block_limit": block_limit,
                 "proposed_len": len(block_tokens),
                 "original_proposed_len": original_proposed_len,
+                "draft_confidence_stopped": draft_confidence_stopped,
+                "draft_step_margins": list(block_margins),
+                "recent_acceptance_before_cycle": recent_rate,
+                "history_draft_budget": history_budget,
+                "budget_before_cooldown": budget_before_cooldown,
+                "gate_target_margin": target_top1_margin,
+                "gate_margin_skip": bool(cheap_decision["skip"]),
+                "t_cache_clone_skipped": not uses_latent_drafter,
                 "accepted_len": accepted,
                 "precommit_unchecked": precommit_unchecked,
                 "target_boundary_margin": boundary_margin,
@@ -5202,14 +5179,11 @@ def speculative_decode(
                 true_next_anchor = true_t_output[:, -1:, :]
             continue
 
-        if args.fast_strict_verification:
-            block_corrective = fast_corrective_token
-        else:
-            block_corrective = (
-                int(target_metric_rows[accepted - 1][0])
-                if target_metric_rows is not None
-                else int(target_predictions[accepted - 1].item())
-            )
+        block_corrective = (
+            int(target_metric_rows[accepted - 1][0])
+            if target_metric_rows is not None
+            else int(target_predictions[accepted - 1].item())
+        )
         committed_prefix_anchor = None
         serial_boundary_logits = None
         if use_serial_fallback:
@@ -5380,9 +5354,6 @@ def main() -> None:
     global _SYNC_COMPONENT_TIMING
     args = parse_args()
     _SYNC_COMPONENT_TIMING = not args.production_async_timing
-    validate_fast_strict_verification(args)
-    if args.batched_draft_boundary and args.single_gpu_parallel_draft:
-        raise ValueError("Test batched boundary and parallel draft separately; they use alternative draft paths.")
     if args.verifier_score_temperature <= 0.0:
         raise ValueError("--verifier-score-temperature must be positive.")
     if not 0.0 <= args.verification_risk_budget <= 1.0:
@@ -5740,8 +5711,6 @@ def main() -> None:
         raise ValueError("--ngram-strict-target-match requires n-gram drafting.")
     if args.ngram_strict_target_match and args.draft_commit_policy != "target_match":
         raise ValueError("--ngram-strict-target-match requires target_match commit policy.")
-    if args.warmup_runs < 0:
-        raise ValueError("--warmup-runs must be non-negative.")
     if args.latent_draft_min_position < 0:
         raise ValueError("--latent-draft-min-position must be non-negative.")
     if args.draft_cooldown_after_failures < 0 or args.draft_cooldown_cycles < 0:
@@ -5806,8 +5775,6 @@ def main() -> None:
         raise ValueError(
             "--draft-logit-source boundary requires a checkpoint trained with `recurft_boundary_head_rank > 0`."
         )
-    if args.batched_draft_boundary and recurrent.has_token_conditioning():
-        raise ValueError("Batched boundary requires a token-independent T; this checkpoint uses token conditioning.")
     peft_model = PeftModel.from_pretrained(base_model, checkpoint).to(device).eval()
     removed_target_lora_modules = apply_target_lora_removal(
         peft_model, metadata, args.target_lora_removal
@@ -5883,12 +5850,6 @@ def main() -> None:
             )
             adaptive_result["wall_time_s"] = adaptive_wall_time
             return adaptive_result
-
-        if sample_idx == 0:
-            for warmup_index in range(args.warmup_runs):
-                print(f"Warmup {warmup_index + 1}/{args.warmup_runs}: greedy + speculative", flush=True)
-                run_baseline()
-                run_adaptive()
 
         baseline = None
         adaptive_first = args.decode_order == "adaptive_first" or (
@@ -6403,11 +6364,6 @@ def main() -> None:
     # Optimistic bound: assume recurrent rollout, verifier probe, and draft-tail projection are perfectly
     # overlapped on other devices, while target prefill/verify/correction/refine remain on the critical path.
     if args.production_async_timing:
-        # Component timers measure host enqueue time, so subtracting prefill or T init
-        # from synchronized wall time does not yield a GPU decode-only measurement.
-        baseline_decode_only_time = None
-        adaptive_decode_only_time = None
-        adaptive_steady_decode_time = None
         parallelizable_aux_time = None
         optimistic_parallel_time = None
     else:
@@ -6506,10 +6462,6 @@ def main() -> None:
             and adaptive_time > 0
             else None
         ),
-        "runtime_optimization_counts": {
-            key: sum(result["adaptive"][key] for result in results)
-            for key in ("batched_boundary_blocks", "parallel_draft_steps", "fast_strict_blocks", "fast_strict_draft_tokens")
-        },
         "adaptive_timing_sums": adaptive_timing_sums,
         "component_timing_mode": (
             "host_enqueue" if args.production_async_timing else "cuda_synchronized"

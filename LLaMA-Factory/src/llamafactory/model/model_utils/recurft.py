@@ -16,7 +16,7 @@ import copy
 import inspect
 import json
 import os
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from typing import TYPE_CHECKING, Any, Optional
 
 import torch
@@ -209,6 +209,8 @@ def collect_recurft_lora_targets(
         "last_lora_alpha": last_alpha,
         "t_lora_alpha": finetuning_args.recurft_t_lora_alpha or finetuning_args.recurft_t_lora_rank * 2,
         "boundary_head_rank": finetuning_args.recurft_boundary_head_rank,
+        "joint_mode": getattr(finetuning_args, "recurft_joint_mode", "legacy"),
+        "boundary_teacher_source": getattr(finetuning_args, "recurft_boundary_teacher_source", "reference"),
         "token_conditioning_rank": finetuning_args.recurft_token_conditioning_rank,
         "multistep_residual_rank": finetuning_args.recurft_multistep_residual_rank,
         "multistep_residual_alpha": (
@@ -1020,11 +1022,18 @@ def attach_recurft_recurrent_module(model: nn.Module, recurrent_module: RecurFTR
     setattr(model, "recurft_metadata", recurrent_module.metadata)
 
 
+@contextmanager
 def disable_adapter(model: nn.Module):
-    if hasattr(model, "disable_adapter"):
-        return model.disable_adapter()
-
-    return nullcontext()
+    # PEFT enable_adapter_layers() may re-enable gradients on frozen adapters.
+    # Reference forwards must leave the caller's trainable scope unchanged.
+    flags = [(p, p.requires_grad) for p in model.parameters()]
+    try:
+        with model.disable_adapter() if hasattr(model, "disable_adapter") else nullcontext():
+            yield
+    finally:
+        for param, requires_grad in flags:
+            if param.requires_grad != requires_grad:
+                param.requires_grad_(requires_grad)
 
 
 def _unwrap_module(model: nn.Module) -> nn.Module:

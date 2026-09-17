@@ -1,0 +1,314 @@
+{
+  "status": "passed_with_documented_limits",
+  "tests": {
+    "passed": 123,
+    "skipped": 1,
+    "skipped_reason": "CUDA stream test skipped in CPU-only pytest; real 4B CUDA training/inference and numerical validators ran separately"
+  },
+  "suite": "/mnt/llmshared-ssd-hd/wangruitao/inception-qwen3-4b/runs/qwen3_4b_matrix_20260918_v2_audited",
+  "source_files": 300,
+  "protocol_files": 25,
+  "protocol_verified": true,
+  "source_verified": true,
+  "prepared_experiments": 9,
+  "prepared_stages": 18,
+  "long_training_executions": 0,
+  "training_modes": {
+    "core": {
+      "training_regime": {
+        "regime": "staged_target_t",
+        "scope": "target_t",
+        "original_base_trainable": false,
+        "target_lora_trainable": true,
+        "T_lora_trainable": true,
+        "boundary_trainable": false,
+        "direct_boundary_teacher": "target",
+        "rollout_teacher": "detached_current_target",
+        "target_sft_ce": 0.0
+      },
+      "global_step": 2,
+      "trainable_groups": {
+        "target": 16515072,
+        "T": 9175040
+      },
+      "gradient_checks": [
+        {
+          "step": 0,
+          "gradient_l2": {
+            "target": 0.3107876956566474,
+            "T": 0.35671197967502805
+          }
+        },
+        {
+          "step": 1,
+          "gradient_l2": {
+            "target": 0.9999985921834984,
+            "T": 0.0017074489542017615
+          }
+        }
+      ],
+      "peak_allocated_gib": 20.507359504699707,
+      "peak_reserved_gib": 22.45703125,
+      "tied_vocabulary_weights_frozen": true,
+      "raw_execution": "/mnt/llmshared-ssd-hd/wangruitao/inception-qwen3-4b/runs/qwen3_4b_audit_smoke_20260918/core/execution.json"
+    },
+    "multistep": {
+      "training_regime": {
+        "regime": "staged_target_t",
+        "scope": "target_t",
+        "original_base_trainable": false,
+        "target_lora_trainable": true,
+        "T_lora_trainable": true,
+        "boundary_trainable": false,
+        "direct_boundary_teacher": "target",
+        "rollout_teacher": "detached_current_target",
+        "target_sft_ce": 0.0
+      },
+      "global_step": 2,
+      "trainable_groups": {
+        "target": 16515072,
+        "T": 9175040
+      },
+      "gradient_checks": [
+        {
+          "step": 0,
+          "gradient_l2": {
+            "target": 0.8260502285522158,
+            "T": 0.5635967062898933
+          }
+        },
+        {
+          "step": 1,
+          "gradient_l2": {
+            "target": 0.5882240305097185,
+            "T": 0.8086980385132796
+          }
+        }
+      ],
+      "peak_allocated_gib": 20.508538246154785,
+      "peak_reserved_gib": 22.458984375,
+      "tied_vocabulary_weights_frozen": true,
+      "raw_execution": "/mnt/llmshared-ssd-hd/wangruitao/inception-qwen3-4b/runs/qwen3_4b_audit_smoke_20260918/multistep/execution.json"
+    },
+    "head": {
+      "training_regime": {
+        "regime": "boundary_only",
+        "scope": "head",
+        "original_base_trainable": false,
+        "target_lora_trainable": false,
+        "T_lora_trainable": false,
+        "boundary_trainable": true,
+        "direct_boundary_teacher": "target",
+        "rollout_teacher": "detached_current_target",
+        "target_sft_ce": 0.0
+      },
+      "global_step": 2,
+      "trainable_groups": {
+        "boundary": 824320
+      },
+      "gradient_checks": [
+        {
+          "step": 0,
+          "gradient_l2": {
+            "boundary": 0.9999998807907033
+          }
+        },
+        {
+          "step": 1,
+          "gradient_l2": {
+            "boundary": 0.9999998160449026
+          }
+        }
+      ],
+      "peak_allocated_gib": 22.64387035369873,
+      "peak_reserved_gib": 23.875,
+      "tied_vocabulary_weights_frozen": true,
+      "raw_execution": "/mnt/llmshared-ssd-hd/wangruitao/inception-qwen3-4b/runs/qwen3_4b_audit_smoke_20260918/head/execution.json"
+    },
+    "post_joint": {
+      "training_regime": {
+        "regime": "frozen_target_joint",
+        "scope": "t_head",
+        "original_base_trainable": false,
+        "target_lora_trainable": false,
+        "T_lora_trainable": true,
+        "boundary_trainable": true,
+        "direct_boundary_teacher": "target",
+        "rollout_teacher": "detached_current_target",
+        "target_sft_ce": 0.0
+      },
+      "global_step": 2,
+      "trainable_groups": {
+        "T": 9175040,
+        "boundary": 824320
+      },
+      "gradient_checks": [
+        {
+          "step": 0,
+          "gradient_l2": {
+            "T": 0.9999962028515015,
+            "boundary": 0.0027066720799083436
+          }
+        },
+        {
+          "step": 1,
+          "gradient_l2": {
+            "T": 0.9999866756079625,
+            "boundary": 0.0051223033507745395
+          }
+        }
+      ],
+      "peak_allocated_gib": 21.966172695159912,
+      "peak_reserved_gib": 22.806640625,
+      "tied_vocabulary_weights_frozen": true,
+      "raw_execution": "/mnt/llmshared-ssd-hd/wangruitao/inception-qwen3-4b/runs/qwen3_4b_audit_smoke_20260918/post_joint/execution.json"
+    },
+    "full_joint": {
+      "training_regime": {
+        "regime": "trainable_target_joint",
+        "scope": "target_t_head",
+        "original_base_trainable": false,
+        "target_lora_trainable": true,
+        "T_lora_trainable": true,
+        "boundary_trainable": true,
+        "direct_boundary_teacher": "target",
+        "rollout_teacher": "detached_current_target",
+        "target_sft_ce": 0.0
+      },
+      "global_step": 2,
+      "trainable_groups": {
+        "target": 16515072,
+        "T": 9175040,
+        "boundary": 824320
+      },
+      "gradient_checks": [
+        {
+          "step": 0,
+          "gradient_l2": {
+            "target": 0.6988024398855673,
+            "T": 0.7153121270292738,
+            "boundary": 0.001847906290124881
+          }
+        },
+        {
+          "step": 1,
+          "gradient_l2": {
+            "target": 0.9039013759646783,
+            "T": 0.42773544411002223,
+            "boundary": 0.0021147510256562647
+          }
+        }
+      ],
+      "peak_allocated_gib": 20.51736831665039,
+      "peak_reserved_gib": 21.298828125,
+      "tied_vocabulary_weights_frozen": true,
+      "raw_execution": "/mnt/llmshared-ssd-hd/wangruitao/inception-qwen3-4b/runs/qwen3_4b_audit_smoke_20260918/full_joint/execution.json"
+    }
+  },
+  "frozen_weight_checks": [
+    {
+      "stage": "head",
+      "target_exact_unchanged_tensors": 504
+    },
+    {
+      "stage": "post_joint",
+      "target_exact_unchanged_tensors": 504
+    },
+    {
+      "stage": "head",
+      "T_exact_unchanged_tensors": 61
+    }
+  ],
+  "resume": {
+    "starting_global_step": 1,
+    "global_step": 2,
+    "optimizer_steps_at_start": [
+      1.0
+    ],
+    "ignore_data_skip": false,
+    "resume_contract_audit": "exact_contract_match"
+  },
+  "pipeline_completed": true,
+  "inference_checks": {
+    "dev_joint_1": {
+      "target": {
+        "checkpoint": "/mnt/llmshared-ssd-hd/wangruitao/inception-qwen3-4b/runs/qwen3_4b_audit_scheduler_smoke/full_joint/seed_42/milestones/joint_1",
+        "adapter_sha256": "b025a35a0a68c67aad40a94fec7c807ed0f69f852e1de0bfced959b203585075",
+        "loaded_tensors": 504,
+        "exact_after_dtype_cast": true,
+        "greedy_and_speculative_share_model_instance": true
+      },
+      "greedy_tokens": 32,
+      "greedy_actual_calls": 32,
+      "methods": [
+        "after_b3_lower_fused_compact_tgraph",
+        "after_b3_lower_fused_compact_tgraph_lookup",
+        "after_b3_lower_fused_compact_tgraph_lookuponly",
+        "greedy_lower_fused"
+      ],
+      "source": "/mnt/llmshared-ssd-hd/wangruitao/inception-qwen3-4b/runs/qwen3_4b_audit_scheduler_smoke/full_joint/seed_42/evaluations/dev_joint_1/results.jsonl"
+    },
+    "dev_joint_2": {
+      "target": {
+        "checkpoint": "/mnt/llmshared-ssd-hd/wangruitao/inception-qwen3-4b/runs/qwen3_4b_audit_scheduler_smoke/full_joint/seed_42/milestones/joint_2",
+        "adapter_sha256": "b9a2deb35a0dfc3a821aec562e09d9ebbafdf5db39f87d9b47575fb89d37b626",
+        "loaded_tensors": 504,
+        "exact_after_dtype_cast": true,
+        "greedy_and_speculative_share_model_instance": true
+      },
+      "greedy_tokens": 32,
+      "greedy_actual_calls": 32,
+      "methods": [
+        "after_b3_lower_fused_compact_tgraph",
+        "after_b3_lower_fused_compact_tgraph_lookup",
+        "after_b3_lower_fused_compact_tgraph_lookuponly",
+        "greedy_lower_fused"
+      ],
+      "source": "/mnt/llmshared-ssd-hd/wangruitao/inception-qwen3-4b/runs/qwen3_4b_audit_scheduler_smoke/full_joint/seed_42/evaluations/dev_joint_2/results.jsonl"
+    },
+    "final_A_budget": {
+      "target": {
+        "checkpoint": "/mnt/llmshared-ssd-hd/wangruitao/inception-qwen3-4b/runs/qwen3_4b_audit_scheduler_smoke/full_joint/seed_42/milestones/joint_1",
+        "adapter_sha256": "b025a35a0a68c67aad40a94fec7c807ed0f69f852e1de0bfced959b203585075",
+        "loaded_tensors": 504,
+        "exact_after_dtype_cast": true,
+        "greedy_and_speculative_share_model_instance": true
+      },
+      "greedy_tokens": 32,
+      "greedy_actual_calls": 32,
+      "methods": [
+        "after_b3_lower_fused_compact_tgraph",
+        "after_b3_lower_fused_compact_tgraph_lookup",
+        "after_b3_lower_fused_compact_tgraph_lookuponly",
+        "greedy_lower_fused"
+      ],
+      "source": "/mnt/llmshared-ssd-hd/wangruitao/inception-qwen3-4b/runs/qwen3_4b_audit_scheduler_smoke/full_joint/seed_42/evaluations/final_A_budget/results.jsonl"
+    },
+    "final": {
+      "target": {
+        "checkpoint": "/mnt/llmshared-ssd-hd/wangruitao/inception-qwen3-4b/runs/qwen3_4b_audit_scheduler_smoke/full_joint/seed_42/milestones/joint_2",
+        "adapter_sha256": "b9a2deb35a0dfc3a821aec562e09d9ebbafdf5db39f87d9b47575fb89d37b626",
+        "loaded_tensors": 504,
+        "exact_after_dtype_cast": true,
+        "greedy_and_speculative_share_model_instance": true
+      },
+      "greedy_tokens": 32,
+      "greedy_actual_calls": 32,
+      "methods": [
+        "after_b3_lower_fused_compact_tgraph",
+        "after_b3_lower_fused_compact_tgraph_lookup",
+        "after_b3_lower_fused_compact_tgraph_lookuponly",
+        "greedy_lower_fused"
+      ],
+      "source": "/mnt/llmshared-ssd-hd/wangruitao/inception-qwen3-4b/runs/qwen3_4b_audit_scheduler_smoke/full_joint/seed_42/evaluations/final/results.jsonl"
+    }
+  },
+  "summary_records": 8,
+  "limits": [
+    "Synthetic two-update checks do not prove convergence, quality or speedup.",
+    "Smoke microbatch=2 and sequence cap=1024, accumulation=1; long recipe accumulation=4.",
+    "A/B/C are multi-factor training recipes, not a one-switch causal ablation.",
+    "Training contract and protocol verify configs/data/model config; base weight shards are not re-hashed at every launch.",
+    "Audit fixes are isolated to inception-qwen3-4b; historical snapshots and other development directories retain their own versions."
+  ]
+}

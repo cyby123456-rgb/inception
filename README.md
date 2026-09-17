@@ -1,5 +1,17 @@
 # LayerLoop / RecurFT Executable Code Export
 
+## Joint training and hybrid inference (2026-09-18)
+
+The new [run guide](local_setup/README.md) covers frozen-target T + boundary
+joint training, safetensors/JSON checkpoint resume, and prompt/history lookup
+with neural T fallback. The [joint recipe](configs/experimental/qwen3_joint_from_base.yaml)
+and [hybrid benchmark](local_setup/benchmark_hybrid.sh) use explicit local asset
+paths. BF16 block verification has observed differences from serial greedy;
+report token equality and answer quality alongside wall time and token/s.
+See the [22,000-step retest](reports/joint_hybrid_20260918.md) and
+[validation record](reports/joint_hybrid_validation_20260918.json).
+
+
 完整的修改版 LLaMA-Factory 源码、递归训练实现和可运行入口。不是仅包含几个补丁的补充材料，也不需要重新拉取上游仓库。此包是 2026-09-12 工作区快照，不声称恢复了七月逐字节一致的代码和环境。
 
 ## 先明确执行路径
@@ -459,3 +471,11 @@ SPEED_PROFILE=batch_strict bash scripts/benchmark_decode_speed.sh --samples 4 --
 ```
 
 start 入口支持 `MERGE_TARGET_LORA=1` 或 `--merge-target-lora`（`--no-merge-target-lora` 关闭）；speed 档位固定默认值，CLI 可覆盖。已安装 batch_strict 版本时，只需更新 `scripts/benchmark_decode_speed.sh`、`scripts/benchmark_decode_start.sh`、`scripts/benchmark_decode_start.py`。此增量不修改解码器、训练或权重文件。
+
+## Qwen3-4B 三组 × 三 seed 实验
+
+[实验说明与运行方法](docs/qwen3_4b_matrix.md)：保留冻结目标的联合训练，另增目标 LoRA＋T＋boundary 头全程联合模式。每个训练后目标均与自己的 greedy 对照；包含模型适配、固定验证划分、周期测速和续训。
+
+## 功能与训练方式核查
+
+[严格核查报告](docs/code_and_training_audit.md) 区分原始分阶段训练、从基座冻结联合、检查点后冻结联合、可训练目标联合，以及它们的 loss、实际更新模块与推理口径。4B 推荐使用 `qwen3_4b_matrix_20260918_v2_audited`；v1 和旧 8B 源快照保留。
