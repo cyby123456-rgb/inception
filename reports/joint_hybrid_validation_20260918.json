@@ -1,0 +1,22 @@
+{
+  "cpu_tests": {
+    "passed": 87,
+    "skipped": 1,
+    "reason": "CUDA stream test run separately"
+  },
+  "cuda_stream_test": {
+    "passed": 1
+  },
+  "cuda_validators": {
+    "fused_rmsnorm_cases": 24,
+    "recurrent_graph_cases": 10,
+    "status": "passed"
+  },
+  "preparation_smoke": "passed: snapshot/config paths, frozen target, preserved max_steps/data position, refusing existing output",
+  "python_compile": "passed for local_setup/*.py",
+  "shell_syntax_and_required_assets": "passed",
+  "raw_logs_sha256": {
+    "inception-publish-tests.log": "c5c8e2761a86097c20b3082d0d9fcca98794f95adafc065babba8561133f7302",
+    "inception-publish-gpu-tests.log": "e45409010fa276764b982ad7321d0e7dfec4f4eb3f06a5f18f51edca5c55b676"
+  }
+}

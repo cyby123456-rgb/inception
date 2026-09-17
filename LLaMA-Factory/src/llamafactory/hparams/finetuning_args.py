@@ -296,6 +296,10 @@ class RecurFTArguments:
         default=0.0,
         metadata={"help": "Weight of boundary-head teacher-logit KL on recurrent rollout states."},
     )
+    recurft_multistep_boundary_teacher_top1_labels: bool = field(
+        default=False,
+        metadata={"help": "Use frozen target argmax labels for rollout boundary CE instead of dataset next-token labels."},
+    )
     recurft_boundary_loss_stride: int = field(
         default=8,
         metadata={"help": "Token stride used to subsample positions for boundary-head CE/KL."},
