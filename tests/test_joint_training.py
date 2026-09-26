@@ -86,6 +86,18 @@ class JointTrainingTests(unittest.TestCase):
         self.assertEqual(config["max_steps"], 34225)
         self.assertEqual(config["recurft_multistep_warmup_start_step"], 33025)
 
+    def test_trainable_target_source_does_not_leak_into_frozen_continuation(self):
+        self.source['recurft_joint_mode'] = 'trainable_target'
+        self.assertEqual(self.build()['recurft_joint_mode'], 'legacy')
+        self.assertTrue(self.build()['recurft_recurrent_trainable_only'])
+
+    def test_safe_optimizer_cannot_cross_into_a_new_scope(self):
+        path = self.ckpt/'optimizer_safe.json'
+        path.write_text('{}')
+        with self.assertRaisesRegex(ValueError, 'optimizer groups'):
+            self.build()
+        self.assertEqual(path.read_text(), '{}')
+
     def test_requires_boundary_checkpoint(self):
         self.metadata["boundary_head_rank"] = 0
         self.save_meta()

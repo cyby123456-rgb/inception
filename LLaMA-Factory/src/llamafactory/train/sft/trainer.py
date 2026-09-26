@@ -178,12 +178,13 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
                 global_step=self.state.global_step,
                 ref_model=self.ref_model,
             )
-            self._recurft_last_metrics = metrics
-            if not hasattr(self, "_recurft_metric_sums"):
-                self._recurft_metric_sums: dict[str, float] = {}
-                self._recurft_metric_counts: dict[str, int] = {}
-
-            _accumulate_recurft_metrics(self._recurft_metric_sums, self._recurft_metric_counts, metrics)
+            prefix = "_recurft" if model.training else "_recurft_eval"
+            setattr(self, prefix + "_last_metrics", metrics)
+            if not hasattr(self, prefix + "_metric_sums"):
+                setattr(self, prefix + "_metric_sums", {})
+                setattr(self, prefix + "_metric_counts", {})
+            _accumulate_recurft_metrics(getattr(self, prefix + "_metric_sums"),
+                                       getattr(self, prefix + "_metric_counts"), metrics)
             return (loss, outputs) if return_outputs else loss
         elif self.finetuning_args.use_asft_loss:
             with torch.no_grad():
@@ -216,12 +217,16 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
 
     @override
     def log(self, logs: dict[str, float], *args, **kwargs) -> None:
-        if self.finetuning_args.use_recurft and hasattr(self, "_recurft_last_metrics"):
-            if hasattr(self, "_recurft_metric_sums") and self._recurft_metric_sums:
-                metrics = _consume_recurft_metrics(self._recurft_metric_sums, self._recurft_metric_counts)
+        evaluation = any(key.startswith("eval_") for key in logs)
+        prefix = "_recurft_eval" if evaluation else "_recurft"
+        if self.finetuning_args.use_recurft and hasattr(self, prefix + "_last_metrics"):
+            sums = getattr(self, prefix + "_metric_sums", {})
+            if sums:
+                metrics = _consume_recurft_metrics(sums, getattr(self, prefix + "_metric_counts"))
             else:
-                metrics = self._recurft_last_metrics
-
+                metrics = getattr(self, prefix + "_last_metrics")
+            if evaluation:
+                metrics = {"eval_" + key: value for key, value in metrics.items()}
             logs = {**logs, **metrics}
 
         return super().log(logs, *args, **kwargs)

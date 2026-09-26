@@ -20,10 +20,11 @@ os.environ.setdefault('TRITON_CACHE_DIR',str(ROOT/'runs/triton_cache'))
 sys.path[:0] = [str(ROOT/'LLaMA-Factory/src'), str(ROOT/'LLaMA-Factory/experiments/recurft_math')]
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from peft import PeftModel
+from peft import PeftModel, get_peft_model_state_dict
 from safetensors.torch import load_file
 import recurft_speculative_generate as dec
 from recurft_rollout_eval import build_recurrent_module
+from checkpoint_identity import target_adapter_signature
 
 
 def dump(path, obj):
@@ -113,7 +114,7 @@ def summarize(rows):
 
 @torch.inference_mode()
 def main():
-    p = argparse.ArgumentParser()
+    p = argparse.ArgumentParser(allow_abbrev=False)
     p.add_argument('--before', type=Path, required=True)
     p.add_argument('--after', type=Path, required=True)
     p.add_argument('--model', type=Path, required=True)
@@ -151,7 +152,7 @@ def main():
               [ck/'recurft_config.json',ck/'recurft_recurrent.safetensors',ck/'adapter_model.safetensors']}
     assets[str(a.data)] = sha(a.data)
     if a.shortlist_vocab:assets[str(a.shortlist_vocab)]=sha(a.shortlist_vocab)
-    sources = [Path(__file__),Path(dec.__file__),ROOT/'LLaMA-Factory/src/llamafactory/model/model_utils/recurft.py',Path(__file__).with_name('lower_right_target.py')]
+    sources = [Path(__file__),Path(dec.__file__),ROOT/'LLaMA-Factory/src/llamafactory/model/model_utils/recurft.py',Path(__file__).with_name('lower_right_target.py'),Path(__file__).with_name('checkpoint_identity.py')]
     if a.fused_norms:
         sources += [Path(__file__).with_name('fused_rmsnorm.py'),Path(__file__).with_name('validate_fused_rms.py')]
     if a.compact:sources.append(Path(__file__).with_name('compact_decode.py'))
@@ -166,7 +167,10 @@ def main():
         else:shutil.copy2(path,a.output/path.name)
     # Execute the frozen helper copies; subsequent workspace edits cannot alter a queued run.
     sys.path.insert(0,str(a.output.resolve()))
-    dump(a.output/'manifest.json',dict(args=vars(a),commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),
+    revision = subprocess.run(['git','rev-parse','HEAD'],cwd=ROOT,text=True,capture_output=True)
+    dump(a.output/'manifest.json',dict(args=vars(a),commit=revision.stdout.strip() if revision.returncode == 0 else 'source-snapshot-see-source-hashes',
+        greedy_target_checkpoint=str(a.after.resolve()), speculative_target_checkpoint=str(a.after.resolve()),
+        target_adapter_sha256=assets[str(a.after/'adapter_model.safetensors')],
         source_hashes={str(s):sha(a.output/s.name) for s in sources},asset_hashes=assets,
         torch=torch.__version__,transformers=__import__('transformers').__version__,
         shared_gpu=True,measurement='outer CUDA-synchronized wall; all component counters are host dispatch durations',
@@ -188,6 +192,8 @@ def main():
         dump(a.output/'strict_prefix_kernel_validation.json',validate_decision())
     adapter1=load_file(str(a.before/'adapter_model.safetensors'));adapter2=load_file(str(a.after/'adapter_model.safetensors'))
     assert adapter1.keys()==adapter2.keys() and all(torch.equal(adapter1[k],adapter2[k]) for k in adapter1), 'Target adapters differ'
+    target_configs = [target_adapter_signature(path) for path in (a.before,a.after)]
+    assert target_configs[0] == target_configs[1], 'Target adapter configurations/scaling differ'
     del adapter1,adapter2
     tokenizer=AutoTokenizer.from_pretrained(a.after,local_files_only=True)
     tok2=AutoTokenizer.from_pretrained(a.before,local_files_only=True)
@@ -207,6 +213,16 @@ def main():
         load_audit[branch]={'load':str(check),'merged_modules':module.merge_lora_for_inference()}
         recurrent[branch]=module
     model=PeftModel.from_pretrained(base,a.after).cuda().eval()
+    saved_target = load_file(str(a.after/'adapter_model.safetensors'))
+    loaded_target = get_peft_model_state_dict(model)
+    assert saved_target.keys() == loaded_target.keys(), 'Loaded target adapter layout differs from checkpoint'
+    assert all(torch.equal(loaded_target[k].detach().cpu(), v.to(loaded_target[k].dtype))
+               for k,v in saved_target.items()), 'Loaded target adapter differs from checkpoint'
+    load_audit['target'] = dict(checkpoint=str(a.after.resolve()),
+        adapter_sha256=sha(a.after/'adapter_model.safetensors'),
+        loaded_tensors=len(saved_target), exact_after_dtype_cast=True,
+        greedy_and_speculative_share_model_instance=True)
+    del saved_target, loaded_target
     if a.merge_target:
         model=model.merge_and_unload(safe_merge=True).eval()
         assert not any('lora_A' in n or 'lora_B' in n for n,_ in model.named_parameters())

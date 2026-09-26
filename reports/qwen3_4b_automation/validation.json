@@ -1,0 +1,78 @@
+{
+  "recorded_utc": "2026-09-17T19:40:25.963663+00:00",
+  "status": "passed_with_documented_limits",
+  "tests": {
+    "passed": 135,
+    "skipped": 1,
+    "new_automation_tests": 12,
+    "skipped_reason": "CUDA stream check in CPU-only pytest"
+  },
+  "checks": [
+    "Eight real worker subprocesses with CPU stub training, eight distinct GPU assignments, local A42 excluded",
+    "External A42 waits for an atomically published bundle; B43/B44 start after their matching A completes",
+    "Cross-host handoff preserves target/T checkpoint bytes and rejects changed data/model/recipe/weights",
+    "Mock SSH/scp transport waits for READY and verifies copied files before publication",
+    "Coordinator termination stops its owned worker and training descendant process groups",
+    "Complete 4B model/data preparation and eight-worker dry-run; repeat dry-run reuses the prepared suite",
+    "Original local v2 and new remote suite have equal A42 training/data/model identity despite changed paths"
+  ],
+  "prepared_suite": "runs/qwen3_4b_8gpu_automation_dryrun_20260918/suite",
+  "local_experiment": "no_joint/seed_42",
+  "local_gpu": "2",
+  "limits": [
+    "No real eight-GPU host execution or remote SSH transfer was performed in this session.",
+    "Local A42 remains queued for an idle GPU; no long-training updates have run.",
+    "The remote entry point prepares eight workers; initial checkpoint dependencies leave three workers waiting.",
+    "Model weights, datasets, remote host address and SSH credentials are external inputs."
+  ],
+  "direct_platform_shell": {
+    "script": "scripts/train/qwen3-4b/run8_qwen3_4b.sh",
+    "syntax": "passed",
+    "conda_activation_and_shared_asset_preparation": "passed",
+    "eight_parallel_dry_run_commands": "passed",
+    "assignments": [
+      {
+        "experiment": "full_joint/seed_42",
+        "gpu": "1",
+        "dependency": null
+      },
+      {
+        "experiment": "full_joint/seed_43",
+        "gpu": "4",
+        "dependency": null
+      },
+      {
+        "experiment": "full_joint/seed_44",
+        "gpu": "7",
+        "dependency": null
+      },
+      {
+        "experiment": "no_joint/seed_43",
+        "gpu": "2",
+        "dependency": null
+      },
+      {
+        "experiment": "no_joint/seed_44",
+        "gpu": "5",
+        "dependency": null
+      },
+      {
+        "experiment": "post_joint/seed_42",
+        "gpu": "0",
+        "dependency": "no_joint/seed_42"
+      },
+      {
+        "experiment": "post_joint/seed_43",
+        "gpu": "3",
+        "dependency": "no_joint/seed_43"
+      },
+      {
+        "experiment": "post_joint/seed_44",
+        "gpu": "6",
+        "dependency": "no_joint/seed_44"
+      }
+    ],
+    "prepared_suite": "runs/qwen3_4b_remote8_20260918",
+    "long_training_executions": 0
+  }
+}

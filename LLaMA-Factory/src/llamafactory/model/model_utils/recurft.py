@@ -209,6 +209,8 @@ def collect_recurft_lora_targets(
         "last_lora_alpha": last_alpha,
         "t_lora_alpha": finetuning_args.recurft_t_lora_alpha or finetuning_args.recurft_t_lora_rank * 2,
         "boundary_head_rank": finetuning_args.recurft_boundary_head_rank,
+        "joint_mode": getattr(finetuning_args, "recurft_joint_mode", "legacy"),
+        "boundary_teacher_source": getattr(finetuning_args, "recurft_boundary_teacher_source", "reference"),
         "token_conditioning_rank": finetuning_args.recurft_token_conditioning_rank,
         "multistep_residual_rank": finetuning_args.recurft_multistep_residual_rank,
         "multistep_residual_alpha": (

@@ -1,0 +1,194 @@
+{
+  "cpu_tests": {
+    "passed": 99,
+    "command": "pytest -q tests LLaMA-Factory/tests/train/test_recurft_multistep.py LLaMA-Factory/tests/train/test_recurft_metric_logging.py"
+  },
+  "real_model": "Qwen3-4B",
+  "smoke_training_steps_per_stage": 2,
+  "smoke_cutoff_len": 1024,
+  "smoke_micro_batch": 2,
+  "smoke_gradient_accumulation": 1,
+  "training_scopes": {
+    "core": {
+      "status": "completed",
+      "global_step": 2,
+      "trainable_groups": {
+        "target": 16515072,
+        "T": 9175040
+      },
+      "gradient_checks": [
+        {
+          "step": 0,
+          "gradient_l2": {
+            "target": 0.6631409523568209,
+            "T": 0.748494532502104
+          }
+        },
+        {
+          "step": 1,
+          "gradient_l2": {
+            "target": 0.6002506446424731,
+            "T": 0.7998118937171055
+          }
+        }
+      ],
+      "peak_allocated_gib": 20.507359504699707,
+      "peak_reserved_gib": 22.45703125,
+      "tied_vocabulary_weights_frozen": true
+    },
+    "multistep": {
+      "status": "completed",
+      "global_step": 2,
+      "trainable_groups": {
+        "target": 16515072,
+        "T": 9175040
+      },
+      "gradient_checks": [
+        {
+          "step": 0,
+          "gradient_l2": {
+            "target": 0.7531241629686009,
+            "T": 0.6578783853350406
+          }
+        },
+        {
+          "step": 1,
+          "gradient_l2": {
+            "target": 0.5615688086941294,
+            "T": 0.8274300458925906
+          }
+        }
+      ],
+      "peak_allocated_gib": 20.508538246154785,
+      "peak_reserved_gib": 22.458984375,
+      "tied_vocabulary_weights_frozen": true
+    },
+    "head": {
+      "status": "completed",
+      "global_step": 2,
+      "trainable_groups": {
+        "boundary": 824320
+      },
+      "gradient_checks": [
+        {
+          "step": 0,
+          "gradient_l2": {
+            "boundary": 0.9999998211860497
+          }
+        },
+        {
+          "step": 1,
+          "gradient_l2": {
+            "boundary": 0.9999998140485613
+          }
+        }
+      ],
+      "peak_allocated_gib": 22.64387035369873,
+      "peak_reserved_gib": 23.875,
+      "tied_vocabulary_weights_frozen": true
+    },
+    "post_joint": {
+      "status": "completed",
+      "global_step": 2,
+      "trainable_groups": {
+        "T": 9175040,
+        "boundary": 824320
+      },
+      "gradient_checks": [
+        {
+          "step": 0,
+          "gradient_l2": {
+            "T": 0.999996351106852,
+            "boundary": 0.0026665335759910548
+          }
+        },
+        {
+          "step": 1,
+          "gradient_l2": {
+            "T": 0.9999865985546553,
+            "boundary": 0.005142520699814069
+          }
+        }
+      ],
+      "peak_allocated_gib": 21.966172695159912,
+      "peak_reserved_gib": 22.806640625,
+      "tied_vocabulary_weights_frozen": true
+    },
+    "full_joint": {
+      "status": "completed",
+      "global_step": 2,
+      "trainable_groups": {
+        "target": 16515072,
+        "T": 9175040,
+        "boundary": 824320
+      },
+      "gradient_checks": [
+        {
+          "step": 0,
+          "gradient_l2": {
+            "target": 0.6968434717983416,
+            "T": 0.717220689387808,
+            "boundary": 0.0018528362982666172
+          }
+        },
+        {
+          "step": 1,
+          "gradient_l2": {
+            "target": 0.9614127078179946,
+            "T": 0.27510656031506586,
+            "boundary": 0.0013665620988925378
+          }
+        }
+      ],
+      "peak_allocated_gib": 20.51736831665039,
+      "peak_reserved_gib": 21.298828125,
+      "tied_vocabulary_weights_frozen": true
+    }
+  },
+  "frozen_checks": {
+    "head_target_tensors_exact": 504,
+    "post_joint_target_tensors_exact": 504,
+    "head_T_tensors_exact": 61
+  },
+  "same_trained_target_inference": {
+    "checkpoint": "/mnt/llmshared-ssd-hd/wangruitao/inception-qwen3-4b/runs/qwen3_4b_smoke_v1/full_joint/checkpoints",
+    "adapter_sha256": "2ae8035a488d8bc91e2a46ec273ff4d4846cab3309950e78824f062f9ae13284",
+    "loaded_tensors": 504,
+    "exact_after_dtype_cast": true,
+    "greedy_and_speculative_share_model_instance": true
+  },
+  "inference_status": {
+    "status": "completed",
+    "measurements": 1,
+    "time": 1789668017.423491
+  },
+  "scheduler_resume": {
+    "status": "completed",
+    "starting_global_step": 1,
+    "global_step": 2,
+    "optimizer_steps_at_start": [
+      1.0
+    ],
+    "ignore_data_skip": false
+  },
+  "scheduler_complete": {
+    "status": "completed",
+    "final_checkpoint": "/mnt/llmshared-ssd-hd/wangruitao/inception-qwen3-4b/runs/qwen3_4b_scheduler_smoke/full_joint/seed_42/milestones/joint_2",
+    "seed": 42,
+    "arm": "full_joint",
+    "total_updates": 2
+  },
+  "scheduler_evaluation_endpoints": {
+    "dev_joint_1": "completed",
+    "dev_joint_2": "completed",
+    "final": "completed",
+    "final_A_budget": "completed"
+  },
+  "prepared_suite": "/mnt/llmshared-ssd-hd/wangruitao/inception-qwen3-4b/runs/qwen3_4b_matrix_20260918_v1",
+  "limitations": [
+    "Synthetic short training checks verify implementation, not convergence.",
+    "One-question 32-token inference checks verify execution and weight identity, not acceleration.",
+    "Smoke accumulation is 1; full experiments use 4 at the same microbatch/sequence length.",
+    "Full nine-run experiment not started."
+  ]
+}

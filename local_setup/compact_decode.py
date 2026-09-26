@@ -19,7 +19,7 @@ def greedy_decode(model,input_ids,max_new_tokens,eos_token_id,anchor_idx,device,
     while len(generated)<max_new_tokens:
         token_gpu=out.logits[:,-1,:].argmax(-1,keepdim=True)
         token=int(token_gpu.item());generated.append(token)
-        if token in eos_ids:break
+        if token in eos_ids or len(generated)>=max_new_tokens:break
         out=dec.target_forward(model,token_gpu,past_key_values=cache,
             start_position=input_ids.shape[1]+len(generated)-1,
             output_hidden_states=False,omit_attention_mask=omit_target_attention_mask)

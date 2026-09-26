@@ -118,3 +118,9 @@ Tests exercise rejection/EOS/cache rollback, lookup-only and mixed execution,
 frozen PEFT scope, and an actual tiny Trainer resumed versus uninterrupted run
 with identical parameters and data order. CUDA numerical validators run when
 the associated optimization is enabled by the inference benchmark.
+
+## Audited 4B training modes
+
+For one local staged experiment plus eight remote GPU workers, see [the Linux/SSH automation guide](../docs/qwen3_4b_eight_gpu.md) and `automation/qwen3_4b_8gpu.sh`. Continuations wait for the exact same-seed checkpoint; the local checkpoint can be published and fetched automatically over SSH.
+
+The legacy preparer above is specific to Qwen3-8B and now rejects 4B configurations. Use [the 4B guide](../docs/qwen3_4b_matrix.md) and [training/code audit](../docs/code_and_training_audit.md) for the three-seed staged, frozen-target continuation, and trainable-target joint experiments. These are distinct training recipes. Audited v2 snapshots also fix the greedy token-cap termination accounting; capped historical timings must not be pooled with corrected timings.

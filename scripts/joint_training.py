@@ -11,7 +11,7 @@ def joint_config(source, recipe, checkpoint, steps, model_config):
     metadata = json.loads((checkpoint / "recurft_config.json").read_text(encoding="utf-8"))
     if metadata.get("boundary_head_rank", 0) <= 0:
         raise ValueError("Joint training needs a boundary checkpoint. Run boundary-warmup first.")
-    for name in ("optimizer.pt", "optimizer.bin", "scheduler.pt"):
+    for name in ("optimizer.pt", "optimizer.bin", "scheduler.pt", "optimizer_safe.json", "optimizer_safe.safetensors"):
         if (checkpoint / name).exists():
             raise ValueError("Joint training changes optimizer groups; use a model-only checkpoint "
                              "saved with save_only_model: true. Keep the original checkpoint intact.")
@@ -34,6 +34,9 @@ def joint_config(source, recipe, checkpoint, steps, model_config):
         raise ValueError("Checkpoint global_step must be a non-negative integer.")
     config = dict(source)
     config.update(recipe)
+    # This launcher always selects the frozen-target continuation recipe, even
+    # when its source checkpoint came from trainable-target joint training.
+    config["recurft_joint_mode"] = "legacy"
     config.update(resume_from_checkpoint=str(checkpoint), max_steps=start + steps,
                   recurft_multistep_warmup_start_step=start,
                   recurft_scheduled_sampling_start_step=start)

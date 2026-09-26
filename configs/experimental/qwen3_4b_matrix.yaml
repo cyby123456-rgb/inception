@@ -1,0 +1,39 @@
+# Qwen3-4B-specific capacity and controlled training schedule.
+seeds: [42, 43, 44]
+target_policy: original_staged
+effective_batch: 8
+micro_batch: 2
+cutoff_len: 1024
+validation_queries: 512
+split_salt: qwen3-4b-joint-comparison-v1
+core_epochs: 1.0
+multistep_epochs: 0.2
+head_epochs: 0.02
+joint_steps: 4000
+core_recurrent_warmup_steps: 200
+multistep_delta_cosine_weight: 0.02
+learning_rates:
+  core: 0.00001
+  multistep: 0.000003
+  head: 0.00005
+  head_warmup: 0.0001
+  joint: 0.000003
+capacity:
+  # Preserve the previous r/hidden_size ratios: 128/4096 and 256/4096.
+  t_rank_per_hidden: 0.03125
+  boundary_rank_per_hidden: 0.0625
+  rank_multiple: 16
+  t_layers: 2
+  target_tail_layers: 1
+  target_lora_rank: 8
+min_free_mib: 30000
+memory_fraction: 0.8
+periodic:
+  samples: 8
+  repeats: 1
+  max_new_tokens: 256
+final:
+  start: 0
+  samples: 64
+  repeats: 2
+  max_new_tokens: 1024

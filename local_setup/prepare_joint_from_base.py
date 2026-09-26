@@ -10,6 +10,14 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def validate_model(config):
+    expected = dict(model_type='qwen3', hidden_size=4096, intermediate_size=12288,
+                    num_hidden_layers=36, num_attention_heads=32, num_key_value_heads=8,
+                    head_dim=128, tie_word_embeddings=False)
+    if any(config.get(k) != v for k,v in expected.items()):
+        raise ValueError('This frozen-target recipe is Qwen3-8B-specific; use prepare_qwen3_4b_matrix.py for 4B')
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--model', type=Path, required=True)
@@ -20,6 +28,10 @@ def main():
     a = p.parse_args()
     if not a.model.is_dir() or not a.train_data.is_file() or not a.test_data.is_file():
         p.error('Supply an existing local model directory and training/test data files.')
+    try:
+        validate_model(json.loads((a.model/'config.json').read_text()))
+    except (OSError, ValueError) as exc:
+        p.error(str(exc))
     gpus = a.gpus.split(',')
     if not gpus or any(not g.isdecimal() for g in gpus) or len(set(gpus)) != len(gpus):
         p.error('--gpus must contain unique nonnegative integer indices.')

@@ -64,3 +64,18 @@ class CompactTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+
+def test_greedy_does_not_forward_after_reaching_token_budget():
+    import adaptive_two_stage_runtime as adaptive
+    # A deterministic counter verifies real calls, not just the reported counter.
+    for module, decoder in [(dec,dec.greedy_decode),(dec,compact.greedy_decode),(adaptive,adaptive.greedy_decode)]:
+        for cap in (1,2,8):
+            seen=[]
+            def forward(model,ids,**kw):
+                seen.append(ids.clone())
+                return SimpleNamespace(logits=logits_for(ids+1),past_key_values=None)
+            with patch.object(module,'target_forward',forward):
+                out=decoder(None,torch.tensor([[0]]),cap,None,1,torch.device('cpu'),True)
+            assert out['token_ids']==list(range(1,cap+1))
+            assert out['target_calls']==len(seen)==cap

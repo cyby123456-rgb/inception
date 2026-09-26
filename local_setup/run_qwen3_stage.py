@@ -5,10 +5,12 @@ import os
 from pathlib import Path
 import sys
 import time
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from common import environment, gpu_snapshot, write_json, sha256
+from training_contract import make_contract, validate_resume, validate_initialization_layout
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -19,10 +21,21 @@ def main():
     parser.add_argument('--allow-shared-gpu', action='store_true', help='Explicit shared-GPU training; preserve other processes.')
     parser.add_argument('--stop-after-step', type=int, help='Save and stop at this global step without changing the full optimizer/scheduler budget.')
     parser.add_argument('--export-initial', type=Path, help='Save the untrained adapter/T/head once, before the first optimizer update.')
+    parser.add_argument('--min-free-mib', type=int, help='Model-specific memory preflight; default retains the 8B thresholds.')
+    parser.add_argument('--memory-fraction', type=float, help='Optional CUDA allocator fraction for this process.')
+    parser.add_argument('--trainable-scope', choices=['target_t', 'head', 't_head', 'target_t_head'])
+    parser.add_argument('--require-tied-embeddings', action='store_true')
     args = parser.parse_args()
     output = args.config.resolve().parent
     if args.resume_from and args.initialize_from:
         raise ValueError('Choose stage initialization or exact within-stage resume, not both.')
+    cfg = yaml.safe_load(args.config.read_text())
+    contract = make_contract(cfg, args.trainable_scope)
+    resume_audit = None
+    if args.resume_from:
+        resume_audit = validate_resume(args.resume_from, contract, required=bool(args.trainable_scope))
+    if args.initialize_from and args.trainable_scope:
+        validate_initialization_layout(args.initialize_from, cfg, args.trainable_scope)
     if (output / 'execution.json').exists():
         if not args.resume_from:raise RuntimeError('Refusing to overwrite an existing execution.')
         previous=json.loads((output/'execution.json').read_text())
@@ -30,16 +43,19 @@ def main():
             raise RuntimeError('Recorded stage process is still alive; refusing concurrent resume.')
         (output/'execution.json').rename(output/('execution_previous_'+str(time.time_ns())+'.json'))
     before = gpu_snapshot(args.gpu)
+    minimum_free = args.min_free_mib or (45000 if args.allow_shared_gpu else 60000)
+    if minimum_free <= 0 or (args.memory_fraction is not None and not 0 < args.memory_fraction <= 1):
+        raise ValueError('Invalid GPU memory preflight/fraction')
     # nvidia-smi utilization is a trailing sample and can outlive the preceding stage.
     for _ in range(0 if args.allow_shared_gpu else 15):
-        if before['free_mib'] >= 60000 and before['util'] <= 10:
+        if before['free_mib'] >= minimum_free and before['util'] <= 10:
             break
         time.sleep(2)
         before = gpu_snapshot(args.gpu)
     if args.allow_shared_gpu:
-        assert before['free_mib'] >= 45000, before
+        assert before['free_mib'] >= minimum_free, before
     else:
-        assert before['free_mib'] >= 60000 and before['util'] <= 10, before
+        assert before['free_mib'] >= minimum_free and before['util'] <= 10, before
     import subprocess
     daemons = []
     for pid in ([] if args.allow_shared_gpu else before['compute_pids']):
@@ -57,15 +73,13 @@ def main():
     os.environ.update(HF_HUB_OFFLINE='1', TRANSFORMERS_OFFLINE='1')
     sys.path[:0] = os.environ['PYTHONPATH'].split(os.pathsep)
     import torch
-    if args.allow_shared_gpu:
-        torch.cuda.set_per_process_memory_fraction(.50)
-    import yaml
+    if args.memory_fraction is not None or args.allow_shared_gpu:
+        torch.cuda.set_per_process_memory_fraction(args.memory_fraction or .50)
     from transformers import TrainerCallback
     from llamafactory.train.tuner import run_exp
     from safe_training_state import install_safe_resume
     install_safe_resume()
 
-    cfg = yaml.safe_load(args.config.read_text())
     if args.stop_after_step is not None:
         assert 0 < args.stop_after_step <= cfg['max_steps']
     if args.resume_from:
@@ -73,6 +87,7 @@ def main():
         cfg['resume_from_checkpoint']=str(args.resume_from.resolve())
     record = {'status': 'running', 'pid': os.getpid(), 'config': str(args.config.resolve()),
               'config_sha256': sha256(args.config), 'gpu_before': before, 'idle_mps': daemons,
+              'training_regime': contract['description'], 'resume_contract_audit': resume_audit,
               'timing_scope': 'shared-GPU training, other processes left running' if args.allow_shared_gpu else 'training; idle MPS left running, not an exclusive benchmark',
               'initialization_checkpoint': str(args.initialize_from.resolve()) if args.initialize_from else None,
               'resume_checkpoint': str(args.resume_from.resolve()) if args.resume_from else None,
@@ -161,6 +176,15 @@ def main():
             for name,p in model.named_parameters():
                 group = 'boundary' if 'boundary_' in name else 'T' if 'recurft' in name else 'target'
                 if p.requires_grad:record['trainable_groups'][group]=record['trainable_groups'].get(group,0)+p.numel()
+            expected = {'target_t': {'target', 'T'}, 'head': {'boundary'},
+                        't_head': {'T', 'boundary'}, 'target_t_head': {'target', 'T', 'boundary'}}
+            if cli_scope:
+                assert set(record['trainable_groups']) == expected[cli_scope], record['trainable_groups']
+            if require_tied:
+                inp, out = model.get_input_embeddings().weight, model.get_output_embeddings().weight
+                assert inp.data_ptr() == out.data_ptr(), 'Qwen3-4B tied embedding/output weights were detached'
+                assert not inp.requires_grad and not out.requires_grad, 'Original tied vocabulary weights must remain frozen'
+                record['tied_vocabulary_weights_frozen'] = True
             if cfg.get('recurft_recurrent_trainable_only') or cfg.get('recurft_stage1_heads_only'):
                 assert record['trainable_groups'].get('target',0)==0,record['trainable_groups']
             record['gradient_checks']=[]
@@ -171,6 +195,9 @@ def main():
                 control.should_save = True
                 control.should_training_stop = True
             return control
+
+        def on_save(self, args, state, control, **kwargs):
+            write_json(Path(args.output_dir)/f'checkpoint-{state.global_step}'/'training_contract.json', contract)
 
         def on_pre_optimizer_step(self, args, state, control, model=None, **kwargs):
             if state.global_step>=3:return
@@ -194,7 +221,7 @@ def main():
             with (output / 'telemetry.jsonl').open('a') as f:
                 f.write(json.dumps(row) + '\n')
             import math
-            for key in ('loss', 'grad_norm'):
+            for key in ('loss', 'eval_loss', 'grad_norm'):
                 if key in row and not math.isfinite(row[key]):
                     raise FloatingPointError(f'Nonfinite {key} at step {state.global_step}')
 
@@ -208,8 +235,11 @@ def main():
             record['global_step'] = state.global_step
             record['peak_allocated_gib'] = torch.cuda.max_memory_allocated()/2**30
             record['peak_reserved_gib'] = torch.cuda.max_memory_reserved()/2**30
+            write_json(Path(args.output_dir)/'training_contract.json', contract)
 
     stop_after_step = args.stop_after_step
+    cli_scope = args.trainable_scope
+    require_tied = args.require_tied_embeddings
     initial_export = args.export_initial
     record['requested_stop_after_step'] = stop_after_step
     record['full_training_max_steps'] = cfg['max_steps']

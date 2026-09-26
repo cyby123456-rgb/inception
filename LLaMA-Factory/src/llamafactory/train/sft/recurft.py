@@ -1021,6 +1021,16 @@ def compute_recurft_loss(
     global_step: int,
     ref_model: Optional["nn.Module"] = None,
 ) -> tuple[torch.Tensor, Any, dict[str, float]]:
+    if getattr(finetuning_args, "recurft_joint_mode", "legacy") == "trainable_target":
+        from .trainable_target_joint import compute_trainable_target_joint_loss
+
+        return compute_trainable_target_joint_loss(
+            _compute_recurft_loss_impl, model, inputs, finetuning_args, global_step, ref_model
+        )
+    return _compute_recurft_loss_impl(model, inputs, finetuning_args, global_step, ref_model)
+
+
+def _compute_recurft_loss_impl(model, inputs, finetuning_args, global_step, ref_model=None):
     unwrapped_model = _unwrap_model(model)
     recurrent_module = getattr(unwrapped_model, "recurft_recurrent", None)
     metadata = getattr(unwrapped_model, "recurft_metadata", None)
@@ -1170,7 +1180,8 @@ def compute_recurft_loss(
                 boundary_mask = _make_token_mask(inputs, finetuning_args, shifted=True).index_select(
                     1, position_index
                 )
-                boundary_teacher_logits = ref_outputs.logits[:, :-1, :].index_select(1, position_index).detach()
+                teacher_outputs = outputs if getattr(finetuning_args, "recurft_boundary_teacher_source", "reference") == "target" else ref_outputs
+                boundary_teacher_logits = teacher_outputs.logits[:, :-1, :].index_select(1, position_index).detach()
                 boundary_token_ce_loss = _masked_token_ce_loss(
                     boundary_logits, boundary_labels, boundary_mask
                 )

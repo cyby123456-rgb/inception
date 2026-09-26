@@ -2687,7 +2687,7 @@ def greedy_decode(
     while len(generated) < max_new_tokens:
         token = int(next_logits.argmax(dim=-1).item())
         generated.append(token)
-        if token in eos_ids:
+        if token in eos_ids or len(generated) >= max_new_tokens:
             break
         token_tensor = torch.tensor([[token]], dtype=torch.long, device=device)
         outputs, elapsed = timed(
@@ -2708,7 +2708,7 @@ def greedy_decode(
     return {
         "token_ids": generated,
         "timings": timings,
-        "target_calls": 1 + max(0, len(generated) - int(bool(generated and generated[-1] in eos_ids))),
+        "target_calls": max(1, len(generated)),
     }
 
 

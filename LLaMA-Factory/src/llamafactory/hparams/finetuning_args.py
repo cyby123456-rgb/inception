@@ -261,6 +261,14 @@ class RecurFTArguments:
             )
         },
     )
+    recurft_joint_mode: str = field(
+        default="legacy",
+        metadata={"help": "legacy preserves existing frozen/staged behavior; trainable_target jointly trains target LoRA, T and boundary head."},
+    )
+    recurft_boundary_teacher_source: str = field(
+        default="reference",
+        metadata={"help": "Direct boundary KL teacher: reference base or detached current adapted target."},
+    )
     recurft_stage1_heads_only: bool = field(
         default=False,
         metadata={
@@ -1197,6 +1205,28 @@ class FinetuningArguments(
                 self.recurft_boundary_head_rank <= 0 or self.recurft_token_conditioning_rank <= 0
             ):
                 raise ValueError("Scheduled sampling requires both boundary-head and token-conditioning ranks.")
+
+            if self.recurft_joint_mode not in ("legacy", "trainable_target"):
+                raise ValueError("Unknown recurft_joint_mode")
+            if self.recurft_boundary_teacher_source not in ("reference", "target"):
+                raise ValueError("Unknown recurft_boundary_teacher_source")
+            if self.recurft_joint_mode == "trainable_target":
+                if (self.recurft_stage1_heads_only or self.recurft_recurrent_trainable_only
+                        or self.recurft_multistep_residual_only or self.recurft_multistep_step1_residual_only):
+                    raise ValueError("trainable_target joint mode cannot freeze target/T")
+                if self.recurft_boundary_head_rank <= 0 or self.recurft_boundary_teacher_source != "target":
+                    raise ValueError("trainable_target requires a boundary head and current target teacher")
+                if self.recurft_kl_loss_weight <= 0:
+                    raise ValueError("trainable_target requires target-to-base KL regularization")
+                if self.recurft_recurrent_loss_weight <= 0 or self.recurft_t_lora_rank <= 0:
+                    raise ValueError("trainable_target requires an active recurrent loss gate and T LoRA")
+                if not (self.recurft_multistep_loss_weight > 0 and self.recurft_multistep_steps > 1
+                        and (self.recurft_multistep_boundary_logit_kl_loss_weight > 0
+                             or self.recurft_multistep_boundary_token_ce_loss_weight > 0)):
+                    raise ValueError("trainable_target requires an active rollout boundary objective")
+                if (self.recurft_token_conditioning_rank or self.recurft_multistep_residual_rank
+                        or self.recurft_multistep_step1_residual_rank):
+                    raise ValueError("trainable_target supports target LoRA, T LoRA and boundary head only")
 
             if self.recurft_stage1_heads_only and (
                 self.recurft_boundary_head_rank <= 0 and self.recurft_token_conditioning_rank <= 0
