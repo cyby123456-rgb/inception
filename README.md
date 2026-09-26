@@ -1,5 +1,17 @@
 # LayerLoop / RecurFT Executable Code Export
 
+## Joint training and hybrid inference (2026-09-18)
+
+The new [run guide](local_setup/README.md) covers frozen-target T + boundary
+joint training, safetensors/JSON checkpoint resume, and prompt/history lookup
+with neural T fallback. The [joint recipe](configs/experimental/qwen3_joint_from_base.yaml)
+and [hybrid benchmark](local_setup/benchmark_hybrid.sh) use explicit local asset
+paths. BF16 block verification has observed differences from serial greedy;
+report token equality and answer quality alongside wall time and token/s.
+See the [22,000-step retest](reports/joint_hybrid_20260918.md) and
+[validation record](reports/joint_hybrid_validation_20260918.json).
+
+
 完整的修改版 LLaMA-Factory 源码、递归训练实现和可运行入口。不是仅包含几个补丁的补充材料，也不需要重新拉取上游仓库。此包是 2026-09-12 工作区快照，不声称恢复了七月逐字节一致的代码和环境。
 
 ## 先明确执行路径

@@ -525,6 +525,8 @@ def _compute_multistep_recurrent_loss(
                 boundary_rollout_teacher_logits = teacher_logits[
                     :, target_index : target_index + 1, :
                 ].detach()
+                if getattr(finetuning_args, "recurft_multistep_boundary_teacher_top1_labels", False):
+                    boundary_rollout_labels = boundary_rollout_teacher_logits.argmax(dim=-1)
                 boundary_rollout_token_ce = _masked_token_ce_loss(
                     boundary_rollout_logits, boundary_rollout_labels, boundary_rollout_mask
                 )

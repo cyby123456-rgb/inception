@@ -1,0 +1,11 @@
+{
+  "source": "/mnt/llmshared-ssd-hd/wangruitao/inception-joint/LLaMA-Factory/experiments/recurft_math/recurft_speculative_generate.py",
+  "source_sha256": "55a06aa2f291bc0552610e032b967ce598a89629c56f753199f4aefa31aa70c7",
+  "derived_sha256": "d4613084c9a15bbb707f9d5dbc0a362ce8b9dd18753da9649bf5622b9f5eae61",
+  "changes": [
+    "recent accepted/proposed window controls draft budget",
+    "per-cycle early stop and confidence audit",
+    "skip T cache cloning when T unused"
+  ],
+  "isolated_from_running_evaluations": true
+}

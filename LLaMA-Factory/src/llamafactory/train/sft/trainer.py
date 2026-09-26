@@ -83,8 +83,10 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
                 patch_accelerator_for_fp8()
 
         super().__init__(**kwargs)
-        if processor is not None:
+        if processor is not None or finetuning_args.use_recurft:
             # avoid wrong loss under gradient accumulation
+            # RecurFT returns a microbatch mean and does not consume num_items_in_batch.
+            # Let Trainer divide by the current accumulation length before backward.
             # https://github.com/huggingface/transformers/pull/36044#issuecomment-2746657112
             self.model_accepts_loss_kwargs = False
 
